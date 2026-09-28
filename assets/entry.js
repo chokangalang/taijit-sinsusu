@@ -190,7 +190,12 @@ function origAttr(text, ruby) {
   return ` data-orig="${esc(v)}"`;
 }
 function editAttr(path) {
-  return LOCAL ? ` data-edit="${esc(path)}"` : '';
+  // M050 場 1（定案 §四 場 1 工項 3）：**永遠**輸出 `data-edit`，不再只給 localhost。
+  // why：批注錨點 `placeMarkers` 靠它定位，而批注是給所有讀者看的；原本非 LOCAL 回空字串
+  //   ⇒ 線上永遠找不到錨點元素、每一則都退成行尾記號。
+  // ⚠ 射程只到「屬性出不出」：雙擊進 `#editbox` 那條路仍由 `init()` 裡的 LOCAL 閘守著
+  //   （場 2 才改為團隊鑰匙制），故對一般讀者**行為零變化**。
+  return ` data-edit="${esc(path)}"`;
 }
 
 // ── 三區塊 ──────────────────────────────────────────────
@@ -410,6 +415,85 @@ function blockOriginal(e) {
     ${origHead(e)}${senses}${refsHTML(e, false)}${kanjiNotesHTML(e)}${edLegend}${emLegend}${idsLegend}
   </section>`;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// M050 場 1（批注層 D）——發包單＝`協作規畫/M050_批注層四場定案_20260925.md` §二 5／6／7／8
+// 卡名「做工á人批注」＝KB 既有名稱（§九 參數表）；夾在「POJ＋日文中譯」與「原冊數位化」之間；
+// 無批注不渲染；`<details open>` 預設展開、摘要列帶計數、不記憶收攏狀態（§二 6）。
+// 署名＝**卡標題本身**，每則不標個人（§二 7）⇒ 資料層的 `by` 不上畫面；每則只標最後核定日（§二 8）。
+function blockAnnots(e) {
+  const an = e.annots || [];
+  if (!an.length) return '';                      // §二 6：無批注不渲染
+  const items = an.map((a, i) => {
+    const n = i + 1;
+    // 編號回跳（§四 場 1 工項 3）：列號連回本文記號，記號連回本列
+    const back = a.path ? `<a class="anback" href="#${esc(a.nid)}-m" title="回到本文記號">${n}</a>`
+                        : `<span class="anback off">${n}</span>`;
+    const dt = a.date ? `<span class="andate">${esc(a.date)}</span>` : '';
+    return `<li class="anitem" id="${esc(a.nid)}">${back}` +
+           `<span class="ankind">${esc(a.kind)}</span>` +
+           `<span class="antext">${esc(a.text)}</span>${dt}</li>`;
+  }).join('');
+  return `<section class="card annots" data-blockname="批注">
+    <details open>
+      <summary>做工á人批注<span class="ancnt">${an.length}</span></summary>
+      <ul class="anlist">${items}</ul>
+    </details>
+  </section>`;
+}
+
+// 資料路徑 → DOM 路徑。**為什麼需要這張表**（C321 逐處實測 `editAttr` 的呼叫面，非推想）：
+//   `data-edit` 發出來的詞彙是**版面**的，批注的 `path` 是**資料**的，兩者不是同一組字串——
+//   ・中譯住在現代化例句欄，其 `data-edit` 是 `…examples[j].modern`，資料路徑卻是 `…examples[j].zh`；
+//     若改用「最長前綴」退讓，`senses[0].examples[1].zh` 會退到**原冊層**的 `senses[0].examples[1]`，
+//     而該處的日文釋義字面常與中譯的引文同字（實例：p1006-2-09 的 jp 就是「斬鑪。」）
+//     ⇒ 記號會插到原冊層的日文上，看起來還「成功」了。故用明表、不用前綴。
+//   ・表頭各欄（`head.kanji`／`head.kana`／`head.poj`）在版面上共用同一個 `data-edit="head"`。
+const AN_DOM_PATH = [
+  [/^(senses\[\d+\]\.examples\[\d+\])\.zh$/, '$1.modern'],
+  [/^head\.[A-Za-z_]\w*$/, 'head'],
+];
+function annDomPath(path) {
+  for (const [re, to] of AN_DOM_PATH) if (re.test(path)) return path.replace(re, to);
+  return path;
+}
+
+// 在錨點元素內找 quote，把記號插在該字之後；ruby 注音盒（.ann）與 <rt> 內的文字不算
+//（那是注音、不是本文；在注音裡命中會把記號插進假名中間）。
+function insertAfterQuote(el, quote, sup) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => (n.parentElement && n.parentElement.closest('.ann, rt'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  let n;
+  while ((n = w.nextNode())) {
+    const k = n.nodeValue.indexOf(quote);
+    if (k < 0) continue;
+    const rest = n.splitText(k + quote.length);
+    rest.parentNode.insertBefore(sup, rest);
+    return true;
+  }
+  return false;
+}
+
+// 渲染後放記號（§二 5）：找到 quote → 插在字後；找不到／無 quote／`.gloss`（帶假名 ruby）→ 行尾。
+// 錨點元素找不到者不放記號（該則仍在卡內列出）——export 已驗過 path，這裡走到就是版面與
+// 上表脫節，寧可少一個記號也不要插到別的欄位上。
+// 同一路徑在兩個卡都有 data-edit（表頭即是）時取**文件序第一個**＝現代化卡那一個。
+function placeMarkers(e, root) {
+  (e.annots || []).forEach((a, i) => {
+    if (!a.path) return;
+    const el = root.querySelector(`[data-edit="${annDomPath(a.path)}"]`);
+    if (!el) return;
+    const sup = document.createElement('sup');
+    sup.className = 'an';
+    sup.id = a.nid + '-m';
+    sup.innerHTML = `<a href="#${a.nid}" title="做工á人批注 ${i + 1}">${i + 1}</a>`;
+    const atEnd = !a.quote || el.classList.contains('gloss');
+    if (atEnd || !insertAfterQuote(el, a.quote, sup)) el.appendChild(sup);
+  });
+}
+
 
 function blockModern(e) {
   const total = (e.senses || []).length;
@@ -645,11 +729,13 @@ async function init() {
   if (e.status === 'skeleton') {
     html = skeletonCard(e) + blockImages(e);   // 骨架：表頭＋建置中說明單卡＋該條原冊書影（B 版）
   } else {
-    html = `<div class="twocol">${blockModern(e)}${blockOriginal(e)}</div>` +
+    // M050 場 1（§二 6）：批注卡夾在「POJ＋日文中譯」與「原冊數位化」之間
+    html = `<div class="twocol">${blockModern(e)}${blockAnnots(e)}${blockOriginal(e)}</div>` +
            blockImages(e);
   }
   html += `<div class="footnav">${navHTML(e)}</div>`;
   root.innerHTML = html;
+  placeMarkers(e, root);                 // M050 場 1：批注記號須在 DOM 存在之後才放
 
   root.addEventListener('click', ev => {
     const z = ev.target.closest('[data-zoom]');

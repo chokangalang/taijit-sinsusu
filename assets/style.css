@@ -209,6 +209,7 @@ footer.site {
 /* ── 響應式 ── */
 @media (max-width: 900px) {
   .twocol { grid-template-columns: 1fr; }
+  .card.annots .anitem { font-size: 15px; padding-left: 1.8em; text-indent: -1.8em; }
   .imgcard .strips img { height: 420px; }
   .entryhead .hz { font-size: 34px; }
   .results .hz { min-width: 56px; font-size: 21px; }
@@ -353,3 +354,45 @@ header.top .title .sitelogo { vertical-align: baseline; }
 .entryhead .dial { font-size: 16px; color: var(--sub); }
 .results .dial { font-size: 13px; color: var(--sub); }
 .results a.row.crow .dial { font-size: 12px; }
+
+/* ══ M050 場 1：做工á人批注（定案 §二 6／§四 場 1 工項 4）════════════════════════
+   「與 † ＊ 同視覺家族」的做法＝**同一組棕、同樣以上標承載**（sup.em 用 #8a5a2b），
+   靠兩件事分辨而不另立顏色：①符號 vs 數字 ②`title` 提示 vs 可點連結。
+   語意分工照 173rd 立的那條：.ed（＊校訂・點虛線）與 .emend（†校改存印・破折虛線）
+   語意相反不可混，批注是第三種——**編者按**，不動底本、只加話，故不給底線、只給上標號。
+   ⚠ class 名 `an` 與注音盒的 `.ann` 差一個字母；本處一律寫 `sup.an`／`.anXXX`，
+   不用裸 `.an`，免得日後有人把兩者的選擇器改混。 */
+sup.an { font-size: .62em; line-height: 0; margin: 0 .08em; vertical-align: super; }
+sup.an a {
+  color: #8a5a2b; font-weight: 700; text-decoration: none;
+  padding: 0 .15em; border-radius: 3px;
+}
+sup.an a:hover { background: #f3e8d8; }
+sup.an:target a, .anitem:target { background: #f6ecd8; }
+
+.card.annots { border-color: #c9b896; background: #fffbf0; }
+.card.annots > details > summary {
+  cursor: pointer; font-size: 15px; color: var(--sub);
+  letter-spacing: .1em; font-weight: 700;
+  border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 10px;
+}
+.card.annots > details > summary::marker { color: var(--badge); }
+.ancnt {
+  font-size: 12px; font-weight: 400; color: var(--badge);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-left: 8px;
+}
+.anlist { list-style: none; margin: 0; padding: 0; }
+.anitem { font-size: 16px; line-height: 1.75; margin: 0 0 .7em; padding-left: 2.1em; text-indent: -2.1em; }
+.anitem:last-child { margin-bottom: 0; }
+.anback {
+  display: inline-block; min-width: 1.5em; margin-right: .4em; text-align: right;
+  color: #8a5a2b; font-weight: 700; text-decoration: none;
+}
+.anback.off { color: var(--sub); font-weight: 400; }
+.anback:hover { text-decoration: underline; }
+.ankind {
+  font-size: 12px; color: var(--sub); border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 6px; margin-right: 6px; white-space: nowrap;
+  vertical-align: .12em;
+}
+.andate { font-size: 12px; color: var(--sub); margin-left: .5em; white-space: nowrap; }
