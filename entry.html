@@ -30,19 +30,68 @@
   </div>
 </div>
 
+<!-- C324（M050 場 2 之 3）：團隊模式的校對修正框。三種編輯器共用一個框，
+     由 entry.js 的 describeSlot() 依「雙擊到哪一格」決定顯示哪一面：
+       editsyl ＝音節編輯器（假名／調號／鼻音／送氣＋POJ 即時換算）
+       editleaf＝文字葉編輯器（整葉值＋符號鈕）
+       editsep ＝head.sep[i] 切換鈕（無／--／|）
+       editdesc＝描述模式（產不出機器可讀改法時的正常出口，不是失敗） -->
 <div id="editbox">
   <div class="panel">
-    <h2>校對修正（本機模式）</h2>
+    <h2>校對修正</h2>
     <p class="src" id="editctx"></p>
-    <label class="src">原值</label>
-    <textarea id="editorig" readonly></textarea>
-    <label class="src">修正值</label>
-    <textarea id="editnew"></textarea>
+
+    <div id="editsyl" class="edpane">
+      <label class="src">假名（片假名；· ＝送氣記號照印）</label>
+      <input id="edkana" type="text" maxlength="16" autocomplete="off" spellcheck="false">
+      <div class="edrow">
+        <label class="src">調號
+          <select id="edtone">
+            <option value="">（空）</option>
+            <option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>7</option><option>8</option>
+          </select>
+        </label>
+        <label class="src"><input id="ednasal" type="checkbox"> 鼻音</label>
+        <label class="src"><input id="edasp" type="checkbox"> 送氣</label>
+      </div>
+      <label class="src">POJ（打這一欄會即時換算成假名）</label>
+      <input id="edpoj" type="text" maxlength="24" autocomplete="off" spellcheck="false">
+      <p class="src" id="edprev"></p>
+    </div>
+
+    <div id="editleaf" class="edpane">
+      <label class="src">原值（<span id="editleaflab">整葉值</span>）</label>
+      <textarea id="editorig" readonly></textarea>
+      <label class="src">修正值</label>
+      <textarea id="editnew"></textarea>
+      <div id="edsyms" class="edsyms"></div>
+    </div>
+
+    <div id="editsep" class="edpane">
+      <label class="src">音節之間（<code>--</code>＝輕聲、<code>|</code>＝詞界、無＝一般連寫）</label>
+      <p class="src" id="edsepnow"></p>
+      <div class="edrow" id="edsepbtns"></div>
+    </div>
+
+    <div id="editdesc" class="edpane">
+      <p class="src" id="editwhy"></p>
+      <label class="src">說明（哪個字、哪裡不對，正確應為…）</label>
+      <textarea id="editdesctext"></textarea>
+    </div>
+
+    <fieldset id="editfix">
+      <legend class="src">這一筆是哪一種（必選）</legend>
+      <label><input type="radio" name="edfix" value="數位化打錯"> 數位化打錯</label>
+      <label><input type="radio" name="edfix" value="原書印面本身有誤"> 原書印面本身有誤</label>
+    </fieldset>
+
     <label class="src">備註（判讀依據、頁面位置等）</label>
     <textarea id="editnote" placeholder="例：原冊 15x 放大可見鼻音圈"></textarea>
+    <p class="src warn" id="edithint"></p>
     <div class="actions">
       <button id="editcancel">取消</button>
-      <button id="editsend" class="primary">送出到本機佇列</button>
+      <button id="editsend" class="primary">送出</button>
     </div>
   </div>
 </div>
@@ -52,7 +101,15 @@
   原冊圖檔來源：<a href="https://das.nlpi.edu.tw/" target="_blank" rel="noopener">國立公共資訊圖書館 數位典藏服務網</a>。<br>
   本站之數位化轉寫、中文翻譯與網站設計 © 2026
   <a href="https://cho-kang-a-lang.github.io/" target="_blank" rel="noopener">做工仔人台語工作室</a>，保留所有權利。
+  <!-- C324：團隊登入（定案 §二 3）。鑰匙只存在這台瀏覽器的 localStorage，
+       伺服器端驗過才蓋 role='team'；外部讀者永遠不需要登入。 -->
+  <span class="teamlogin"><button id="teambtn" type="button">團隊登入</button><span id="teamwho"></span></span>
 </footer>
+<!-- C324：音節編輯器要用 `parsePoj`／`pojToKana`／`kanaToPoj`（定案 §四 場 2 之 3 明訂
+     不另寫轉換器）。本頁原本只載 entry.js——引擎只掛在 index.html 上，於是那三支在
+     條目頁是 undefined。順序：引擎在前、entry.js 在後。
+     `publish_from_windows.py` 的受管清單本來就含這支，發布面零改動。 -->
+<script src="assets/poj_converter.js"></script>
 <script src="assets/entry.js"></script>
 </body>
 </html>
