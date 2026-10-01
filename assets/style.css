@@ -35,6 +35,20 @@ header.top .title:hover { text-decoration: none; }
 header.top nav { margin-left: auto; display: flex; gap: 14px; font-size: 14px; }
 header.top nav a { color: #cbbfa8; }
 
+/* 錨點跳轉要讓開頁首（C322；操作者 2026-09-29 實機回報）。
+   病灶：`header.top` 是 `position: sticky; top: 0`，而錨點跳轉預設把標的捲到 y=0
+   ——那正好是頁首底下 ⇒ **跳到了、但看不到**。實測 `p0958-2-01` 兩個方向皆中：
+   375 寬（頁首 92px）批注列被蓋 92px／88%、本文記號被蓋 30px／99%；
+   1280 寬（頁首 56px）亦被蓋 28px／37px。**桌機與手機都一樣。**
+   ⚠ 這一型逃過了本場的站面驗收，因為當時的判準寫的是「標的在視窗內」
+   （`bottom > 0 && top < innerHeight`）——標的被頁首蓋住時那個條件**仍然成立**。
+   判準必須問「有沒有被固定元素遮住」，不是「在不在視窗裡」。
+   取值：頁首高度只有兩種（導覽列換行與否＝56 或 92），而換行由 `flex-wrap` 撐出來、
+   **沒有對應的 media query 可掛**，故取窄版 92 再加 12 餘裕＝104 當統一值；
+   寬版會多讓開約 48px，那是無害的呼吸空間。實測兩種寬度、兩個方向皆清空頁首。
+   射程：`html` 一處管全站四頁（about／entry／index／revisions 共用同一個頁首）。 */
+html { scroll-padding-top: 104px; }
+
 main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 60px; }
 
 .card {
@@ -396,3 +410,54 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
   vertical-align: .12em;
 }
 .andate { font-size: 12px; color: var(--sub); margin-left: .5em; white-space: nowrap; }
+
+/* ══ C324（M050 場 2 之 3）：團隊模式的編輯器與疊加層 ══════════════════════ */
+/* 三個編輯面板一次只亮一個（由 entry.js 的 showPane 切）。 */
+.edpane { display: none; }
+.edpane.on { display: block; }
+#editbox .edrow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#editbox .edrow label { display: inline-flex; align-items: center; gap: 4px; margin-top: 0; }
+#editbox input[type=text], #editbox select {
+  width: 100%; max-width: 320px; padding: 6px 8px; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 4px; font-family: inherit;
+}
+#editbox select { width: auto; }
+#edprev { margin-top: 8px; font-size: 15px; }
+#editbox fieldset {
+  margin-top: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px 10px;
+}
+#editbox fieldset legend { padding: 0 4px; }
+#editbox fieldset label { display: inline-flex; align-items: center; gap: 4px; margin-right: 16px; }
+.edsyms { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.symbtn, .sepbtn {
+  padding: 4px 10px; font-size: 15px; font-family: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff;
+}
+.sepbtn.cur { background: var(--bar); color: var(--bar-ink); border-color: var(--bar); }
+.src.warn { color: #9a3b2f; }
+
+/* 疊加層標記（定案 §二 14：queued＝校對中、applied＝待上站；對所有人可見）。
+   ⚠ 標記要看得出來「這不是定稿」，但不能搶走本文——用小字底色，不用紅字。 */
+.patch {
+  font-size: 11px; line-height: 1.6; margin-left: .4em; padding: 0 5px;
+  border-radius: 4px; white-space: nowrap; vertical-align: .15em;
+  border: 1px solid transparent;
+}
+.patch.queued { background: #f6e8b8; color: #6b4b2d; border-color: #e0cd93; }
+.patch.applied { background: #dce9d5; color: #33562a; border-color: #b9d3ad; }
+.patchundo { margin-left: 5px; color: inherit; text-decoration: underline; cursor: pointer; }
+.patched { background: #fdf6df; border-radius: 3px; }
+
+/* 團隊登入（頁尾）。一般讀者看得到這顆鈕但用不到——不隱藏，隱藏了站主與 blues 找不到。 */
+.teamlogin { display: inline-block; margin-left: 10px; white-space: nowrap; }
+.teamlogin button {
+  font-size: 12px; font-family: inherit; padding: 2px 8px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 4px; background: transparent; color: inherit;
+}
+#teamwho { font-size: 12px; margin-left: 4px; }
+
+/* 表頭假名的 token／分隔包裝（C324）：**純定位用、零視覺**——
+   這兩個 span 是音節編輯器與 sep 切換鈕的錨點，不得帶任何會改變版面的樣式。 */
+.kt, .ksep { display: inline; }
+body.team .kt:hover { outline: 1px dashed var(--badge); outline-offset: 1px; cursor: text; }
+body.team .ksep:hover { outline: 1px dashed var(--badge); outline-offset: 1px; cursor: pointer; }
