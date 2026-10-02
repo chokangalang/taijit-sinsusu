@@ -16,16 +16,43 @@
 
 <div id="lightbox"><img src="" alt="書影放大"></div>
 
+<!-- C332（M050 場 3 之 1）：統一對話框。四顆區塊鈕都開這一個框，類別依按鈕預選、可改
+     （定案 §二 9）；類別決定拉校對的 cls。團隊模式多一類「批注草稿」、暱稱欄隱藏。
+     Turnstile：團隊免驗；widget 載不起來或驗不過照樣送得出去，伺服器端只標記（feedback.js）。 -->
 <div id="reportbox">
   <div class="panel">
-    <h2>回報錯誤</h2>
+    <h2>回報與留言</h2>
     <p class="src" id="reportctx"></p>
+    <fieldset id="reportcat" class="rcats">
+      <legend class="src">類別（已依按鈕預選，可改）</legend>
+      <label><input type="radio" name="rcat" value="表頭"> 表頭</label>
+      <label><input type="radio" name="rcat" value="原冊改錯字"> 原冊改錯字</label>
+      <label><input type="radio" name="rcat" value="翻譯意見"> 翻譯意見</label>
+      <label><input type="radio" name="rcat" value="留言"> 留言補充</label>
+      <label class="teamonly"><input type="radio" name="rcat" value="批注"> 批注草稿</label>
+    </fieldset>
+    <div id="rfix" class="rpane">
+      <label class="src">原文 → 應為（選填）</label>
+      <div class="edrow"><input id="rbefore" type="text" maxlength="200" placeholder="原文">
+        <span>→</span><input id="rafter" type="text" maxlength="200" placeholder="應為"></div>
+    </div>
+    <div id="rann" class="rpane">
+      <p class="src" id="rannpath"></p>
+      <div class="edrow">
+        <label class="src">引文（選取的文字）<input id="rannquote" type="text" maxlength="200"></label>
+        <label class="src">性質 <select id="rannkind"></select></label>
+      </div>
+    </div>
     <textarea id="reporttext" placeholder="請描述問題（哪個字、哪個注音／翻譯有誤，正確應為…）"></textarea>
-    <label class="src">暱稱（選填，將會顯示在公開的修訂記錄中）</label>
-    <input id="reportname" type="text" maxlength="60" placeholder="例：阿明">
+    <p class="src warn" id="rcathint"></p>
+    <div id="rnamebox">
+      <label class="src">暱稱（選填，將會顯示在公開的修訂記錄與留言頁中）</label>
+      <input id="reportname" type="text" maxlength="60" placeholder="例：阿明">
+    </div>
+    <div id="rturnstile"></div>
     <div class="actions">
       <button id="reportcancel">取消</button>
-      <button id="reportsend" class="primary">送出回報</button>
+      <button id="reportsend" class="primary">送出</button>
     </div>
   </div>
 </div>
@@ -90,6 +117,7 @@
     <textarea id="editnote" placeholder="例：原冊 15x 放大可見鼻音圈"></textarea>
     <p class="src warn" id="edithint"></p>
     <div class="actions">
+      <button id="editannot" type="button" title="不是改值、是要加一則編者按：轉成批注草稿（錨點＝這一欄）">改寫批注草稿</button>
       <button id="editcancel">取消</button>
       <button id="editsend" class="primary">送出</button>
     </div>
@@ -110,6 +138,11 @@
      條目頁是 undefined。順序：引擎在前、entry.js 在後。
      `publish_from_windows.py` 的受管清單本來就含這支，發布面零改動。 -->
 <script src="assets/poj_converter.js"></script>
+<!-- C332：Turnstile。Site Key 是公開值（`docs/清單_Cloudflare三件設定…` §三之七）；放行網域只有
+     taijit-sinsusu.pages.dev ⇒ 在 localhost 會報 110200「Domain not authorized」＝設計內的假失敗
+     （清單 §3.5），對話框照樣送得出去。`render=explicit`：開對話框才渲染、團隊模式不渲染。 -->
+<script>window.TURNSTILE_SITEKEY = '0x4AAAAAAFHS8iG4cdt1WHQ8';</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <script src="assets/entry.js"></script>
 </body>
 </html>

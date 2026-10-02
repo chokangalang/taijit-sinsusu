@@ -21,7 +21,17 @@
 // 操作者 2026-09-29 實跑 `PRAGMA table_info` 後落檔；⚠ 讀本檔的 INSERT 推不出完整 schema）：
 //   pk `fid`／`received`（伺服器端 `DEFAULT datetime('now')`）兩欄由 D1 自己填，
 //   其餘 14 欄由本檔 POST 寫入。`ts` 與 `id` 是唯二 `notnull=1` 的欄，不可漏。
+//   ＋C332（M050 場 3）第 17 欄 `turnstile TEXT`（操作者在瀏覽器 `ALTER TABLE … ADD COLUMN`，
+//   前測 16 後驗 17）＝本檔寫 15 欄。值域見下方 `TS_VALUES`。
 // ⚠ 排序與去重一律用 `received`／`fid`，**不要用 `ts`**——`ts` 是前端送來的、可被寫錯或偽造。
+//
+// ── C332：Turnstile（定案 §二 9、§九「開；團隊免驗；失敗仍送出並標記」）─────────────
+//   ⚠ **驗證結果只寫進 `turnstile` 欄，從不拒收**（上面「不拒收」那條硬要求照舊）：
+//   定案 §四 場 3 完成定義「Turnstile 擋住無 token 的機器 POST」讀作「標記為未驗、下游可濾」
+//   （操作者 2026-10-03 裁；交件通報請站主確認）。下游＝留言頁 export 不出未驗列
+//   （`export_site_data.comment_visible`）、拉校對卡面標「未驗」。
+//   ⚠ secret 讀不到、siteverify 逾時或回非 JSON＝`error`（我方的問題，不是讀者的）；
+//   讀者沒帶 token＝`missing`；Cloudflare 判失敗＝`fail`。三者都照收。
 
 // TEAM_TOKENS 格式＝`name1:token1,name2:token2`（定案 §二 3）。
 // 解析紀律（`docs/清單_Cloudflare三件設定…` §1.2-2）：以 `,` 切段、每段只切**第一個** `:`
@@ -65,6 +75,46 @@ export function bearer(request) {
 // 後審表兩邊都判不出狀態，寧可當場拒收）。
 export const STATUS_VALUES = ['queued', 'applied', 'rejected', 'published', 'reverted'];
 
+// C332：`turnstile` 欄的值域（舊列＝NULL＝本欄加入前收的，不是未驗）。
+export const TS_VALUES = ['ok', 'fail', 'missing', 'error', 'team'];
+export const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+export const SITEVERIFY_TIMEOUT_MS = 3000;
+
+// → TS_VALUES 之一。**永不丟例外**（任何意外都落 `error`，呼叫端照收）。
+//   `fetchImpl` 只給測試換掉網路；正式路徑用全域 fetch。
+export async function verifyTurnstile(env, cfToken, ip, fetchImpl) {
+  if (!cfToken) return 'missing';
+  const secret = String((env && env.TURNSTILE_SECRET) || '');
+  if (!secret) return 'error';
+  const doFetch = fetchImpl || ((typeof fetch === 'function') ? fetch : null);
+  if (!doFetch) return 'error';
+  const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), SITEVERIFY_TIMEOUT_MS) : null;
+  try {
+    const form = new URLSearchParams();
+    form.set('secret', secret);
+    form.set('response', cfToken);
+    if (ip) form.set('remoteip', ip);
+    const r = await doFetch(SITEVERIFY_URL, {
+      method: 'POST', body: form, signal: ctl ? ctl.signal : undefined,
+    });
+    if (!r || !r.ok) return 'error';
+    const j = await r.json();
+    return (j && j.success === true) ? 'ok' : 'fail';
+  } catch (e) {
+    return 'error';
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+// 第 17 欄還沒加（操作者的 ALTER 尚未跑、或發布順序弄反）時 D1 回的錯誤字樣。
+//   遇到就改用不含該欄的舊句再寫一次——寧可少一個標記，也不拒收一筆回報。
+export function isMissingColumnErr(e) {
+  const m = String((e && e.message) || e || '');
+  return /no such column|has no column named/i.test(m) && /turnstile/i.test(m);
+}
+
 export function json(obj, status = 200, headers = {}) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -106,15 +156,30 @@ export async function onRequestPost({ request, env }) {
     if (!rec.id || (!rec.note && !rec.after && !rec.op)) {
       return json({ ok: false, err: 'empty' }, 400);
     }
-    const res = await env.DB.prepare(
-      'INSERT INTO feedback (ts,id,block,path,before,after,note,reporter,role,cat,fixkind,quote,op,status)'
-      + ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-    ).bind(rec.ts, rec.id, rec.block, rec.path, rec.before, rec.after, rec.note,
-           rec.reporter, rec.role, rec.cat, rec.fixkind, rec.quote, rec.op, rec.status).run();
+    // C332：團隊鑰匙免驗（定案 §二 9）；空檢查之後才驗＝被 400 擋下的列不必打一次 siteverify。
+    rec.turnstile = team ? 'team'
+      : await verifyTurnstile(env, f(b.cf_turnstile, 2048),
+                              (request.headers && request.headers.get('cf-connecting-ip')) || '');
+    const vals = [rec.ts, rec.id, rec.block, rec.path, rec.before, rec.after, rec.note,
+                  rec.reporter, rec.role, rec.cat, rec.fixkind, rec.quote, rec.op, rec.status];
+    let res;
+    try {
+      res = await env.DB.prepare(
+        'INSERT INTO feedback (ts,id,block,path,before,after,note,reporter,role,cat,fixkind,quote,op,status,turnstile)'
+        + ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).bind(...vals, rec.turnstile).run();
+    } catch (e) {
+      if (!isMissingColumnErr(e)) throw e;
+      res = await env.DB.prepare(
+        'INSERT INTO feedback (ts,id,block,path,before,after,note,reporter,role,cat,fixkind,quote,op,status)'
+        + ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).bind(...vals).run();
+    }
     const fid = (res && res.meta && res.meta.last_row_id) || 0;
     // 回傳 role／reporter／fid：前端要靠 role 決定要不要顯示「校對中」疊加，
     // 靠 fid 做「撤回」。三者都不是機密（reporter 本來就會署名在站面上）。
-    return json({ ok: true, role: rec.role, reporter: rec.reporter, fid });
+    // C332：多回 `turnstile`——前端據以告訴留言者「未通過驗證＝要等站方看過才會出現在留言頁」。
+    return json({ ok: true, role: rec.role, reporter: rec.reporter, fid, turnstile: rec.turnstile });
   } catch (e) {
     return json({ ok: false, err: 'server' }, 500);
   }

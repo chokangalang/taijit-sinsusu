@@ -678,10 +678,19 @@ function headStrip(e, withKana) {
     ${blank ? '' : `<span class="pj"${h.poj_star ? ' title="採校訂值（見原冊區＊註）"' : ''}>${esc(h.poj)}${h.poj_star ? '*' : ''}${unc}</span>`}
     ${h.dial ? `<span class="dial" title="腔口註記：原冊印於釋義處（照印見原冊數位化區）">（${esc(h.dial)}）</span>` : ''}
     ${withKana ? `<span class="kn">${headKanaHTML(h)}</span>` : ''}${skelChip}${proofChip}
-    <button class="reportbtn hd" data-block="表頭">回報錯誤</button>
+    <button class="reportbtn hd" data-block="表頭">回報錯誤</button>${commentLink(e)}
     <span class="loc">${esc(locText(e))}</span>
     ${navHTML(e)}
   </div>`;
+}
+
+// C332（M050 場 3 之 3）：條目頁顯示留言數（定案 §四 場 3「批注卡或表頭條」⇒ 取表頭條：
+//   批注卡無批注不渲染，掛在那裡會讓「有留言、沒批注」的條目看不到）。
+//   `e.comments` 由 export 只在 >0 時寫（C321 README §六：寫 0 是假資料）⇒ 沒有就不畫。
+function commentLink(e) {
+  const n = parseInt(e && e.comments, 10);
+  if (!(n > 0)) return '';
+  return `<a class="cmtlink" href="comments.html?id=${encodeURIComponent(e.id)}">留言 ${n} 則 →</a>`;
 }
 
 // 表頭漢字判讀註記（head.kanji_notes）→ 可見行（68th 補3 站主回饋：
@@ -752,14 +761,202 @@ function skeletonCard(e) {
 }
 
 // ── 回報（線上直送 /api/feedback；失敗自動退回複製模式） ──
+// ══ C332（M050 場 3 之 1）：統一對話框（定案 §二 2／4／9、§四 場 3 之 1）═══════════════
+// 四顆區塊鈕留作入口、對話框統一；類別依按鈕預選、可改；類別決定 cls（`feedback_daily.CAT_CLS`）。
+// ⚠ 送進 D1 `cat` 的字串必須與 `review_live/feedback_daily.py` 的 `CAT_CLS` 鍵＋`COMMENT_CAT`
+//   **逐字相同**（`test_report_dialog.py` 機械對版）。定案 §二 9 稱「留言補充」，D1 值是「留言」（§三）。
+const REPORT_CATS = ['表頭', '原冊改錯字', '翻譯意見', '留言'];
+const COMMENT_CAT = '留言';
+const ANNOT_CAT = '批注';                      // 團隊模式多一類「批注草稿」（定案 §二 9／10）
+// 按鈕 → 預選類別。「原冊書影」鈕預選改錯字＝定案 §二 9 明文。
+const BLOCK_CAT = { '表頭': '表頭', '原冊數位化': '原冊改錯字', '原冊書影': '原冊改錯字',
+                    '現代化對照': '翻譯意見' };
+// ⚠ 本表＝`website/build/export_site_data.py` 的 `ANNOT_KINDS`（單一真相）的瀏覽器副本；
+//   `test_report_dialog.py` 讀兩邊原始碼斷言相等。批注草稿的 kind 借 D1 `fixkind` 欄送
+//   （C330 自裁、`SOP_拉校對` §十 第 2 條）。
+const ANNOT_KINDS_UI = ['補充', '異見', '理由'];
+const CAT_HINT = {
+  // ⚠ 不寫「一小時內」：每小時工作只在有快車道修正時才發布（`fastlane_hourly` 步 11），
+  //   留言要等下一次發布（C332 實查）。
+  '留言': '留言會在下一次網站更新後出現在「留言」頁。站方不在留言頁回覆、'
+        + '不保證回覆；有價值的意見會引用進「做工á人批注」。',
+  '批注': '批注草稿進收件匣，經站主核定（可改字）後才上站；卡標題即署名，不標個人。',
+};
+
+function catForBlock(block) {
+  return BLOCK_CAT[block] || '原冊改錯字';
+}
+
+// 批注錨點的資料路徑解析——**與 `export_site_data.annot_path_resolve` 同一套語法**
+//   （`鍵` 或 `鍵[n]` 以 `.` 相連）。解析不到回 undefined（站面條目上合法的 null 不算失敗）。
+function annResolve(entry, path) {
+  let cur = entry;
+  for (const seg of String(path || '').split('.')) {
+    const m = /^([A-Za-z_]\w*)((?:\[\d+\])*)$/.exec(seg);
+    if (!m || cur == null || typeof cur !== 'object' || !(m[1] in cur)) return undefined;
+    cur = cur[m[1]];
+    for (const n of (m[2].match(/\d+/g) || [])) {
+      if (!Array.isArray(cur) || +n >= cur.length) return undefined;
+      cur = cur[+n];
+    }
+  }
+  return cur;
+}
+
+// 選取文字／雙擊入口 → 批注的 `{path, quote}`（定案 §二 5：path 必填、quote 選填）。
+//   `hostPath`＝`[data-edit]` 的值（**版面**詞彙），要換成**資料**路徑才是批注的 path
+//   （兩者不是同一組字串，見上方 `AN_DOM_PATH` 的長註）：
+//   ・現代化例句欄 `…examples[j].modern`：選在中譯行（`.zhline`）＝`…examples[j].zh`；
+//     選在台語行＝在該例句的字串欄裡找含引文者。
+//   ・表頭 `head`：`head.kanji` → `head.poj` 依序找含引文者。
+//   ・其餘：宿主路徑本身是字串欄就用它；是物件就在**直接子欄**（不含 `*_units`、**不含 `zh`**）裡找
+//     含引文者。⚠ 不含 `zh`：原冊層例句的 `tw`／`jp` 是 units 陣列、只有 `zh` 是字串（C332 實查
+//     p0092-1-06），在原冊層選了「油」若往 `zh` 找就會錨到現代層的中譯上——選的明明是日文。
+//   找不到含引文的字串欄＝退用宿主本身的路徑、丟引文（解析得出、記號落該欄行尾；定案 §二 5 設計內）。
+//   路徑全解析不出＝回空，由站主在卡面補（`apply_annots` 的錨點閘擋空路徑，不會寫壞）。
+function annDraftAnchor(entry, hostPath, inZh, quote) {
+  const q = String(quote || '').trim();
+  const hp = String(hostPath || '');
+  if (!entry || !hp) return { path: '', quote: q };
+  let cands;
+  const mm = /^(senses\[\d+\]\.examples\[\d+\])\.modern$/.exec(hp);
+  if (mm) cands = inZh ? [mm[1] + '.zh'] : [mm[1]];
+  else if (hp === 'head') cands = ['head.kanji', 'head.poj'];
+  else cands = [hp];
+  let firstOk = '';
+  for (const c of cands) {
+    const v = annResolve(entry, c);
+    if (v === undefined) continue;
+    if (typeof v === 'string') {
+      if (!firstOk) firstOk = c;
+      if (!q || v.indexOf(q) >= 0) return { path: c, quote: q };
+      continue;
+    }
+    if (v && typeof v === 'object' && !Array.isArray(v) && q) {
+      for (const k of Object.keys(v)) {
+        if (k === 'zh' || /_units$/.test(k) || typeof v[k] !== 'string') continue;
+        if (v[k].indexOf(q) >= 0) return { path: c + '.' + k, quote: q };
+      }
+    }
+    if (!firstOk && v !== null && typeof v === 'object') firstOk = c;
+  }
+  // 解析得出但引文對不上＝留路徑、丟引文（`apply_annots` ③ 要求 quote 在錨點值內，帶著必被擋）
+  return firstOk ? { path: firstOk, quote: '' } : { path: '', quote: q };
+}
+
+// 對話框內容 → POST 的列（純函式；`test_report_dialog.py` 在 node 實跑）。
+//   ・`cat` 一律送（之前完全不送、四類全靠 `block` 判 cls）。
+//   ・原冊改錯字：「原文→應為」進 D1 既有的 `before`／`after` 欄。
+//   ・批注草稿：`path`／`quote`、kind 借 `fixkind`；暱稱不送（團隊列由伺服器蓋章）。
+//   ・團隊帶鑰匙（免驗）；一般讀者帶 Turnstile token（沒有就不帶＝伺服器標 missing、照收）。
+function buildReportRec(o) {
+  const rec = { source: 'online', ts: o.ts, id: o.eid, block: o.block,
+                note: o.note, reporter: o.team ? '' : (o.reporter || ''), cat: o.cat };
+  if (o.cat === '原冊改錯字') {
+    if (o.before) rec.before = o.before;
+    if (o.after) rec.after = o.after;
+  }
+  if (o.cat === ANNOT_CAT) {
+    rec.path = o.path || '';
+    rec.quote = o.quote || '';
+    rec.fixkind = o.kind || '';
+  }
+  if (o.team) rec.token = o.token;
+  else if (o.cfToken) rec.cf_turnstile = o.cfToken;
+  return rec;
+}
+
+// 送出前的空檢查：說明必填；原冊改錯字有「應為」也算有內容（伺服器端判準＝note 或 after 非空）。
+function reportEmptyWhy(o) {
+  if (o.cat === ANNOT_CAT && !o.path) return '批注草稿需要錨點：先選取本文的文字（或雙擊該欄）再開這個框。';
+  if (!o.note && !(o.cat === '原冊改錯字' && o.after)) return '請先描述內容。';
+  return '';
+}
+
 let reportCtx = '';
 let reportBlock = '';
-function openReport(block, eid) {
+let reportEid = '';
+let reportAnn = { path: '', quote: '' };
+let LAST_SEL = null;          // 最近一次落在條目本文裡的選取（批注草稿的 quote 與錨點來源）
+let tsWidget = null;          // Turnstile widget id（render 一次、之後 reset）
+let tsToken = '';
+
+function rememberSelection() {
+  try {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const text = String(sel.toString() || '').trim();
+    if (!text || text.length > 200) return;
+    const n = sel.anchorNode;
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    const host = el && el.closest && el.closest('[data-edit]');
+    const root = $('#entry');
+    if (!host || !root || !root.contains(host)) return;   // 選在對話框裡等＝不覆蓋
+    LAST_SEL = { quote: text, hostPath: host.getAttribute('data-edit') || '',
+                 inZh: !!el.closest('.zhline') };
+  } catch (e) {}
+}
+
+function tsRender() {
+  const box = $('#rturnstile');
+  if (!box) return;
+  tsToken = '';
+  box.style.display = TEAM.on ? 'none' : '';
+  if (TEAM.on) return;                                     // 團隊鑰匙免驗（定案 §二 9）
+  try {
+    const ts = window.turnstile;
+    if (!ts || !window.TURNSTILE_SITEKEY) return;          // 沒載到＝不帶 token、照樣送得出去
+    if (tsWidget == null) {
+      tsWidget = ts.render(box, {
+        sitekey: window.TURNSTILE_SITEKEY,
+        callback: t => { tsToken = t || ''; },
+        'expired-callback': () => { tsToken = ''; },
+        'error-callback': () => { tsToken = ''; return true; },
+      });
+    } else {
+      ts.reset(tsWidget);
+    }
+  } catch (e) { tsToken = ''; }
+}
+
+function setReportCat(cat) {
+  document.querySelectorAll('#reportcat input[name=rcat]').forEach(r => { r.checked = (r.value === cat); });
+  const rf = $('#rfix'), ra = $('#rann');
+  if (rf) rf.classList.toggle('on', cat === '原冊改錯字');
+  if (ra) ra.classList.toggle('on', cat === ANNOT_CAT);
+  $('#rcathint').textContent = CAT_HINT[cat] || '';
+  $('#reporttext').placeholder = cat === COMMENT_CAT ? '想補充或討論的內容（純文字）'
+    : cat === ANNOT_CAT ? '批注本文（編者按：補充／異見／理由）'
+    : '請描述問題（哪個字、哪個注音／翻譯有誤，正確應為…）';
+}
+
+function currentReportCat() {
+  const r = document.querySelector('#reportcat input[name=rcat]:checked');
+  return r ? r.value : catForBlock(reportBlock);
+}
+
+// `pre`：{cat, hostPath, inZh, quote}——雙擊入口「改寫批注草稿」帶進來的錨點。
+function openReport(block, eid, pre) {
   reportBlock = block;
+  reportEid = eid;
   reportCtx = `【回報】條目 ${eid}／區塊：${block}`;
   $('#reportctx').textContent = reportCtx;
   $('#reporttext').value = '';
+  $('#rbefore').value = '';
+  $('#rafter').value = '';
   try { $('#reportname').value = localStorage.getItem('tjss_reporter') || ''; } catch (e) {}
+  $('#rnamebox').style.display = TEAM.on ? 'none' : '';    // 團隊模式暱稱欄隱藏（定案 §二 9）
+  // 批注錨點：雙擊入口帶的優先，其次最近一次本文選取
+  const src = (pre && pre.hostPath) ? pre : (LAST_SEL || {});
+  reportAnn = annDraftAnchor(ENTRY, src.hostPath, !!src.inZh, (pre && pre.quote) || src.quote || '');
+  $('#rannpath').textContent = reportAnn.path
+    ? `錨點：${reportAnn.path}` : '錨點：（未定——先選取本文的文字或雙擊該欄）';
+  $('#rannquote').value = reportAnn.quote;
+  $('#rannkind').innerHTML = ANNOT_KINDS_UI.map(k => `<option>${esc(k)}</option>`).join('');
+  let cat = (pre && pre.cat) || catForBlock(block);
+  if (cat === ANNOT_CAT && !TEAM.on) cat = COMMENT_CAT;
+  setReportCat(cat);
+  tsRender();
   $('#reportbox').classList.add('on');
 }
 async function fallbackCopy(txt) {
@@ -771,26 +968,43 @@ async function fallbackCopy(txt) {
   }
 }
 async function sendReport(eid) {
-  const note = $('#reporttext').value.trim();
-  if (!note) { alert('請先描述問題內容。'); return; }
-  const reporter = $('#reportname').value.trim();
-  try { localStorage.setItem('tjss_reporter', reporter); } catch (e) {}
-  const rec = { source: 'online', ts: new Date().toISOString(), id: eid,
-                block: reportBlock, note: note, reporter: reporter };
-  let ok = false;
+  const cat = currentReportCat();
+  const o = {
+    ts: new Date().toISOString(), eid: eid || reportEid, block: reportBlock, cat,
+    note: $('#reporttext').value.trim(),
+    reporter: TEAM.on ? '' : $('#reportname').value.trim(),
+    before: $('#rbefore').value.trim(), after: $('#rafter').value.trim(),
+    path: reportAnn.path, quote: $('#rannquote').value.trim(), kind: $('#rannkind').value,
+    team: TEAM.on, token: TEAM.token, cfToken: tsToken,
+  };
+  const why = reportEmptyWhy(o);
+  if (why) { alert(why); return; }
+  if (!TEAM.on) { try { localStorage.setItem('tjss_reporter', o.reporter); } catch (e) {} }
+  const rec = buildReportRec(o);
+  let j = null;
   try {
     const r = await fetch('/api/feedback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
       body: JSON.stringify(rec),
     });
-    ok = r.ok && (await r.json()).ok === true;
-  } catch (e) { ok = false; }
-  if (ok) {
-    alert('已送出，感謝回報！');
+    j = r.ok ? await r.json() : null;
+  } catch (e) { j = null; }
+  if (j && j.ok === true) {
+    if (cat === COMMENT_CAT) {
+      // 未通過自動驗證的留言照收，但留言頁只在站方看過後才出（export `comment_visible`）
+      const unverified = j.turnstile && j.turnstile !== 'ok' && j.turnstile !== 'team';
+      alert('已送出，感謝留言！' + (unverified
+        ? '\n（這則留言沒有通過自動驗證，站方看過之後才會出現在留言頁。）'
+        : '\n下一次網站更新後會出現在「留言」頁。'));
+    } else {
+      alert('已送出，感謝回報！');
+    }
   } else {
-    await fallbackCopy(reportCtx + '\n回報者：' + reporter + '\n說明：' + note);
+    await fallbackCopy(reportCtx + '\n類別：' + cat + '\n回報者：' + o.reporter + '\n說明：' + o.note
+      + (o.after ? '\n原文→應為：' + o.before + ' → ' + o.after : ''));
   }
+  tsToken = '';
   $('#reportbox').classList.remove('on');
 }
 
@@ -1471,6 +1685,28 @@ async function init() {
   $('#lightbox').addEventListener('click', () => $('#lightbox').classList.remove('on'));
   $('#reportsend').addEventListener('click', () => sendReport(e.id));
   $('#reportcancel').addEventListener('click', () => $('#reportbox').classList.remove('on'));
+  // ── C332：統一對話框的類別切換＋批注草稿的兩個錨點入口（選取文字／雙擊）──
+  if ($('#reportcat')) {
+    $('#reportcat').addEventListener('change', ev => {
+      if (ev.target && ev.target.name === 'rcat') setReportCat(ev.target.value);
+    });
+  }
+  document.addEventListener('selectionchange', rememberSelection);
+  if ($('#editannot')) {
+    // 雙擊入口帶 path（定案 §二 10）：從校對修正框轉成批注草稿，錨點取被雙擊的那一欄
+    $('#editannot').addEventListener('click', () => {
+      if (!TEAM.on || !editTarget) return;
+      const host = editTarget.closest && editTarget.closest('[data-edit]');
+      const inSel = LAST_SEL && host && LAST_SEL.hostPath === host.getAttribute('data-edit');
+      $('#editbox').classList.remove('on');
+      openReport('批注', e.id, {
+        cat: ANNOT_CAT,
+        hostPath: host ? host.getAttribute('data-edit') : '',
+        inZh: !!(editTarget.closest && editTarget.closest('.zhline')),
+        quote: inSel ? LAST_SEL.quote : '',
+      });
+    });
+  }
   if ($('#editsend')) {
     $('#editsend').addEventListener('click', submitEdit);
     $('#editcancel').addEventListener('click', () => $('#editbox').classList.remove('on'));

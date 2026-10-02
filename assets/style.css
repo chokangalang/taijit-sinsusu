@@ -461,3 +461,33 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .kt, .ksep { display: inline; }
 body.team .kt:hover { outline: 1px dashed var(--badge); outline-offset: 1px; cursor: text; }
 body.team .ksep:hover { outline: 1px dashed var(--badge); outline-offset: 1px; cursor: pointer; }
+
+/* ── C332（M050 場 3）：統一對話框（類別單選、改錯字選填欄、批注草稿錨點、Turnstile）── */
+#reportbox .panel { max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+#reportbox fieldset.rcats {
+  margin: 4px 0 8px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px 8px;
+}
+#reportbox fieldset.rcats legend { padding: 0 4px; }
+#reportbox fieldset.rcats label {
+  display: inline-flex; align-items: center; gap: 4px; margin: 4px 14px 0 0;
+}
+#reportbox .teamonly { display: none !important; }
+body.team #reportbox .teamonly { display: inline-flex !important; }
+#reportbox .rpane { display: none; margin-bottom: 6px; }
+#reportbox .rpane.on { display: block; }
+#reportbox .edrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#reportbox .edrow input[type=text] { flex: 1 1 120px; width: auto; min-width: 0; }
+#reportbox .edrow label { display: inline-flex; align-items: center; gap: 4px; margin-top: 0; }
+#reportbox select { font-size: 15px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; }
+#rcathint:empty { display: none; }
+#rturnstile { margin-top: 10px; min-height: 0; }
+.entryhead .cmtlink { font-size: 13px; margin-left: 8px; align-self: center; white-space: nowrap; }
+
+/* ── C332（M050 場 3 之 3）：留言頁 ── */
+.cmtpage .cmtdecl { font-size: 14px; color: var(--sub); line-height: 1.6; }
+.cmtpage .cmtfilter { font-size: 14px; margin: 8px 0; }
+.cmtlist { list-style: none; padding: 0; margin: 0; }
+.cmtlist li { border-bottom: 1px dashed var(--line); padding: 10px 2px; }
+.cmtlist .cmthead { font-size: 13px; color: var(--sub); display: flex; gap: 10px; flex-wrap: wrap; }
+.cmtlist .cmttext { font-size: 16px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+.cmtlist .cmtcited { font-size: 12px; color: #fff; background: var(--badge); border-radius: 4px; padding: 0 6px; }

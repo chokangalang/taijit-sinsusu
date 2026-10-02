@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>留言・台日新辭書線上版</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+</head>
+<body>
+<header class="top">
+  <a class="title" href="index.html"><img class="sitelogo" src="assets/logo.png" alt="做工仔人台語工作室">台日新辭書線上版</a>
+  <nav><a href="index.html">搜尋</a><a href="revisions.html">修訂紀錄</a><a href="about.html">關於</a></nav>
+</header>
+<!-- C332（M050 場 3 之 3；定案 §二 2）：留言頁獨立、不審核。資料＝`data/comments.json`
+     （`export_site_data.py` 產；隱藏列與未通過自動驗證且站方未放行者不匯出）。
+     讀者寫的文字一律以純文字輸出（textContent），不渲染任何 HTML。 -->
+<main class="cmtpage">
+  <section class="card">
+    <h2>留言</h2>
+    <p class="cmtdecl">讀者對條目的補充與討論。<strong>站方不在本頁回覆，也不保證回覆</strong>；
+      有價值的意見會引用進該條目的「做工á人批注」，並註明出處。要留言，請到條目頁按「回報錯誤」，
+      類別選「留言補充」。新留言在下一次網站更新後出現。</p>
+    <p class="cmtfilter" id="cmtfilter"></p>
+    <ul class="cmtlist" id="cmtlist"><li class="pending">載入中…</li></ul>
+  </section>
+</main>
+<footer class="site">
+  《臺日新辭書》東方孝義（1889–1957）著，臺灣警察協會 1931 年出版，著作權存續期間已屆滿（公有領域）。
+  原冊圖檔來源：<a href="https://das.nlpi.edu.tw/" target="_blank" rel="noopener">國立公共資訊圖書館 數位典藏服務網</a>。<br>
+  本站之數位化轉寫、中文翻譯與網站設計 © 2026
+  <a href="https://cho-kang-a-lang.github.io/" target="_blank" rel="noopener">做工仔人台語工作室</a>，保留所有權利。
+</footer>
+<script>
+'use strict';
+// 一則留言 → <li>。**全部經 textContent**，不經 innerHTML（讀者文字＝不可信輸入）。
+function cmtItem(c) {
+  const li = document.createElement('li');
+  li.id = 'c' + c.fid;
+  const head = document.createElement('div');
+  head.className = 'cmthead';
+  const when = document.createElement('span');
+  when.textContent = String(c.date || '');
+  const ent = document.createElement('a');
+  ent.href = 'entry.html?id=' + encodeURIComponent(c.id || '');
+  ent.textContent = String(c.id || '');
+  const who = document.createElement('span');
+  who.textContent = c.name ? String(c.name) : '（匿名）';
+  head.append(when, ent, who);
+  if (c.status === 'cited') {
+    const ct = document.createElement('a');
+    ct.className = 'cmtcited';
+    ct.href = 'entry.html?id=' + encodeURIComponent(c.id || '') + (c.cited_nid ? '#' + encodeURIComponent(c.cited_nid) : '');
+    ct.textContent = '已引用進批注';
+    head.append(ct);
+  }
+  const body = document.createElement('div');
+  body.className = 'cmttext';
+  body.textContent = String(c.text || '');
+  li.append(head, body);
+  return li;
+}
+
+const want = new URLSearchParams(location.search).get('id') || '';
+const list = document.getElementById('cmtlist');
+const filt = document.getElementById('cmtfilter');
+fetch('data/comments.json', { cache: 'no-cache' }).then(r => {
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}).then(d => {
+  let items = (d && d.items) || [];
+  if (want) {
+    items = items.filter(c => c.id === want);
+    filt.textContent = '';
+    filt.append('只列條目 ');
+    const a = document.createElement('a');
+    a.href = 'entry.html?id=' + encodeURIComponent(want);
+    a.textContent = want;
+    filt.append(a, ` 的留言（${items.length} 則）　`);
+    const all = document.createElement('a');
+    all.href = 'comments.html';
+    all.textContent = '看全部留言';
+    filt.append(all);
+  } else {
+    filt.textContent = `全部留言 ${items.length} 則（新到舊）`;
+  }
+  list.textContent = '';
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'pending';
+    li.textContent = '目前沒有留言。';
+    list.append(li);
+    return;
+  }
+  for (const c of items) list.append(cmtItem(c));
+}).catch(() => {
+  list.textContent = '';
+  const li = document.createElement('li');
+  li.className = 'pending';
+  li.textContent = '留言資料暫時載入不了。';
+  list.append(li);
+});
+</script>
+</body>
+</html>
