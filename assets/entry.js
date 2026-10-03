@@ -669,6 +669,11 @@ function headStrip(e, withKana) {
     ? '<span class="chip skel" title="表頭為機器辨識初稿，尚未精校">建置中</span>' : '';
   const blank = isBlankKanji(h.kanji);   // □ 表頭：POJ 主位、□ 退次要（2026-07-12）
   const hzAttrs = `${editAttr('head')}${v2Attr('head.kanji')}${origAttr(h.kanji + '｜' + kanaTxt + '｜' + h.poj, '')}`;
+  // C333（U117）：骨架條目的假名畫在這裡、沒有 `origHead` ⇒ 原本不在任何 `[data-edit]` 裡，
+  //   雙擊入口（`init` 的 `closest('[data-edit]')`）直接丟掉、音節編輯器開不起來。
+  //   比照 `origHead` 給宿主掛 `data-edit="head"`（不掛 `data-v2`：音節槽由 `.kt` 定）。
+  //   `.hz` 排在前面 ⇒ `placeMarkers` 取「文件序第一個」宿主仍落在 `.hz`，批注記號位置不變。
+  const knAttrs = `${editAttr('head')}${origAttr(h.kanji + '｜' + kanaTxt + '｜' + h.poj, '')}`;
   const mix = blank ? null : mixKanjiParts(h.kanji_units, h.poj);
   const hzHTML = blank
     ? `<span class="hz pjhz"${hzAttrs}>${esc(h.poj)}${unc}</span><span class="dimk">${esc(h.kanji)}</span>`
@@ -677,7 +682,7 @@ function headStrip(e, withKana) {
     ${hzHTML}
     ${blank ? '' : `<span class="pj"${h.poj_star ? ' title="採校訂值（見原冊區＊註）"' : ''}>${esc(h.poj)}${h.poj_star ? '*' : ''}${unc}</span>`}
     ${h.dial ? `<span class="dial" title="腔口註記：原冊印於釋義處（照印見原冊數位化區）">（${esc(h.dial)}）</span>` : ''}
-    ${withKana ? `<span class="kn">${headKanaHTML(h)}</span>` : ''}${skelChip}${proofChip}
+    ${withKana ? `<span class="kn"${knAttrs}>${headKanaHTML(h)}</span>` : ''}${skelChip}${proofChip}
     <button class="reportbtn hd" data-block="表頭">回報錯誤</button>${commentLink(e)}
     <span class="loc">${esc(locText(e))}</span>
     ${navHTML(e)}
