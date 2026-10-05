@@ -1615,6 +1615,42 @@ async function withdraw(p) {
   }
 }
 
+// C335（U124）：團隊模式下互見連結 `a.reflink` 的單擊**延後跳頁**，讓雙擊有機會開修正框。
+//   病灶（M052_X1 第 11 條，站主正式站實操）：連結裡包著可改的單位（注音單位、`refs[i]` 槽），
+//   第一下 click 瀏覽器就照 href 跳走、`dblclick` 永遠等不到。
+//   修法取「延後跳」不取「Ctrl／⌘＋點擊才跳」：後者要學新手勢，且 Ctrl／⌘＋點擊的瀏覽器預設是
+//   開新分頁（不可吃掉）⇒ 同分頁跳轉就沒有手勢了。延後的代價＝團隊成員點連結慢一拍。
+//   ・讀者模式（`TEAM.on=false`）一律不攔＝行為不變；`TEAM.on` 在事件當下讀 ⇒ 登入／登出即時生效。
+//   ・修飾鍵、非左鍵、鍵盤 Enter（`detail` 0，不可能接第二下）一律放行給瀏覽器預設。
+//   ・第二下落在可改單位（`[data-edit]` 內）＝取消跳頁、交給 `dblclick` 開框；落在不可改處＝照樣跳。
+//   ・間隔取常數：網頁讀不到作業系統的雙擊間隔設定；Windows 預設 500ms，取同值。
+//   ・取消點在**第二下按下**（`mousedown` detail≥2，見 `cancelRefNavOnPress`），不是第二下放開的 click：
+//     計時器自第一下放開起算 ⇒ 到點必晚於「第一下按下＋間隔」，而作業系統認雙擊＝兩次按下相隔不超過間隔
+//     ⇒ 第二下按下必在到點之前。若只在第二下 click 取消，第二下按久一點就會先跳走
+//     （C335 操作者 Edge 實測撞到；自動化測試每下瞬間按放，撞不到）。
+const REF_NAV_DELAY = 500;
+let refNavTimer = null;
+function deferRefClick(ev) {
+  if (!TEAM.on) return false;
+  const a = ev.target && ev.target.closest && ev.target.closest('a.reflink');
+  if (!a) return false;
+  if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return false;
+  if (!ev.detail) return false;
+  ev.preventDefault();
+  if (refNavTimer) { clearTimeout(refNavTimer); refNavTimer = null; }
+  if (ev.detail >= 2 && ev.target.closest('[data-edit]')) return true;
+  const href = a.getAttribute('href');
+  refNavTimer = setTimeout(() => { refNavTimer = null; location.href = href; }, REF_NAV_DELAY);
+  return true;
+}
+function cancelRefNavOnPress(ev) {
+  if (!TEAM.on || !refNavTimer || !(ev.detail >= 2)) return;
+  const t = ev.target;
+  if (!(t && t.closest && t.closest('a.reflink') && t.closest('[data-edit]'))) return;
+  clearTimeout(refNavTimer);
+  refNavTimer = null;
+}
+
 // ── 初始化 ──────────────────────────────────────────────
 async function init() {
   const id = new URLSearchParams(location.search).get('id') || '';
@@ -1658,6 +1694,7 @@ async function init() {
   await loadPatches();                   // C324：疊加層（定案 §二 14）——對所有人可見，含 queued
 
   root.addEventListener('click', ev => {
+    if (deferRefClick(ev)) return;       // C335（U124）：團隊模式互見連結延後跳頁
     const z = ev.target.closest('[data-zoom]');
     if (z) {
       ev.preventDefault();
@@ -1670,6 +1707,7 @@ async function init() {
     const rb = ev.target.closest('.reportbtn');
     if (rb) openReport(rb.dataset.block, e.id);
   });
+  root.addEventListener('mousedown', cancelRefNavOnPress);   // C335（U124）：第二下按下即取消延後跳頁
   // C324：雙擊入口一律掛上，由 `openEdit` 的 `TEAM.on` 閘決定開不開
   //   ⇒ 一般讀者雙擊什麼都不會發生（與 C323 之前的線上行為相同）。
   // ⚠ 傳進去的是**事件目標**、不是 `[data-edit]` 宿主——音節格／注音格要靠「點到哪一格」
