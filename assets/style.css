@@ -436,6 +436,36 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .sepbtn.cur { background: var(--bar); color: var(--bar-ink); border-color: var(--bar); }
 .src.warn { color: #9a3b2f; }
 
+/* C338（U116）：整葉注音編輯器。框＝可直接打字的一行字（散字），帶注音的詞塊是不可打字的整塊，
+   雙擊詞塊才改；注音畫在字上（ruby）。橘底＝改了字、注音還是舊的（待確認，不擋送出）。 */
+.edwtext {
+  margin-top: 8px; padding: 18px 10px 10px; min-height: 3.2em; font-size: 20px; line-height: 2.2;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff; word-break: break-all;
+  outline: none;
+}
+.edwtext:focus { border-color: var(--accent); }
+.wblk {
+  display: inline-block; margin: 0 1px; padding: 0 2px; border-radius: 3px; cursor: pointer;
+  background: #eef3fb; border-bottom: 2px solid #9db5d8; user-select: none;
+}
+.wblk rt { font-size: 11px; color: var(--accent); }
+.wblk.fresh { background: #e6f3e6; border-bottom-color: #8fbf8f; }
+.wblk.pend { background: #fde8cc; border-bottom-color: #e0a050; }
+.edwlost { margin-top: 6px; font-size: 14px; }
+.edwgone { display: none; margin-top: 6px; padding: 6px 8px; font-size: 14px; line-height: 1.6;
+  background: #fdecea; border: 1px solid #e3b4ad; border-radius: 4px; color: #7a2e24; }
+.edwgone.on { display: block; }
+#editbox .edwgone button { margin-left: 8px; padding: 2px 10px; font-size: 13px; }
+.wlost {
+  display: inline-flex; align-items: center; gap: 4px; margin: 2px 6px 2px 0; padding: 1px 6px;
+  border: 1px dashed var(--line); border-radius: 4px; color: var(--sub);
+}
+#editbox .wlost button { padding: 1px 6px; font-size: 12px; }
+.edwblk { display: none; margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #faf8f2; }
+.edwblk.on { display: block; }
+#editbox .edwblk input[type=text] { max-width: 9em; }
+#editbox .edwblk input[type=number] { width: 3.5em; padding: 4px; font-size: 15px; }
+
 /* 疊加層標記（定案 §二 14：queued＝校對中、applied＝待上站；對所有人可見）。
    ⚠ 標記要看得出來「這不是定稿」，但不能搶走本文——用小字底色，不用紅字。 */
 .patch {

@@ -29,17 +29,15 @@ let OPSRC = null;
 //   三份由 `website/build/test_op_syntax.py` 機械對版——照定案 §三「path 互轉 JS／Python
 //   各一份、無法單一來源 ⇒ 設同步戳」之處置（體例同 `AN_DOM_SYNC`）。
 //   **改任一邊必同批改另外兩邊並 bump 戳。**
-const PATH_SYNTAX_VERSION = 'C324';
-const OP_LEAF_SHAPES = [            // 葉型：old/new＝整個字串葉值
+const PATH_SYNTAX_VERSION = 'C338';  // C338（U116）：opsrc 加 gr／jr、白名單拿掉 .c 葉
+const OP_LEAF_SHAPES = [            // 葉型：old/new＝整個字串葉值（帶注音的三種文字葉另收整葉型，見 WHOLE_LEAF_SHAPES）
   ['head', 'kanji'],
   ['head', 'sep', '#'],
   ['senses', '#', 'gloss', 'jp'],
   ['senses', '#', 'gloss', 'ruby', '#', 'k'],
-  ['senses', '#', 'gloss', 'ruby', '#', 'c'],
   ['senses', '#', 'examples', '#', 'tw'],
   ['senses', '#', 'examples', '#', 'jp'],
   ['senses', '#', 'examples', '#', 'jp_ruby', '#', 'k'],
-  ['senses', '#', 'examples', '#', 'jp_ruby', '#', 'c'],
 ];
 const OP_TOKEN_SHAPES = [           // token 型：old/new＝整個假名 token 物件，鍵組不增不減
   ['head', 'kana', '#'],
@@ -1143,6 +1141,469 @@ function rubyLeaf(units, ri, key) {
   return null;
 }
 
+// ══ C338：U116 整葉注音編輯器（站主 M053 補函第 4–9 條）══════════════════════════
+// 編輯單位＝一片帶注音的文字葉＋它的整份注音清單；op 仍一筆、一條 path（指文字葉），
+// old／new＝{t: 文字, r: 注音清單, a: 各條起點}（碼位；掛不上的條 a＝null）。
+// 驗證與位置的單一真相在 Python（`feedback_daily.validate_op` 跑 export 的 `attach_ruby`）——
+//   這裡**不另寫一份掛載演算法**（M033 §0.3：複製即漂移）。前端的 `a` 是「編輯器裡這條注音黏在
+//   哪個字上」的主張；與 attach_ruby 實掛不同＝整筆退（補函第 7 條），不會靜默掛錯。
+// ⚠ 起點一律以**碼位**計（`Array.from`），不用 JS 字串長度：擴充區漢字（𧜞 之類）在 JS 長 2。
+// ⚠ 必與 `review_live/feedback_daily.py` 的 `WHOLE_LEAF_SHAPES` 逐項相等（test_op_syntax 對版）。
+const WHOLE_LEAF_SHAPES = [
+  ['senses', '#', 'gloss', 'jp'],
+  ['senses', '#', 'examples', '#', 'tw'],
+  ['senses', '#', 'examples', '#', 'jp'],
+];
+function isWholePath(arr) { return !!arr && shapeMatch(arr, WHOLE_LEAF_SHAPES); }
+function cpLen(s) { return Array.from(String(s == null ? '' : s)).length; }
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+function isWholeVal(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && 't' in v && 'r' in v && 'a' in v;
+}
+
+// 站面單位（`entries` 的 units）與 opsrc 的整份注音清單。
+function wholeUnits(arr) {
+  const e = ENTRY;
+  if (!e || !arr) return null;
+  const sn = (e.senses || [])[arr[1]];
+  if (!sn) return null;
+  if (arr[2] === 'gloss') return sn.gloss || null;
+  const x = (sn.examples || [])[arr[3]];
+  return x ? (x[arr[4]] || null) : null;
+}
+function wholeRubySrc(arr) {
+  if (!OPSRC || !arr) return null;
+  if (arr[2] === 'gloss') return (OPSRC.gr || {})[String(arr[1])] || [];
+  const key = `${arr[1]}.${arr[3]}`;
+  return arr[4] === 'tw' ? ((OPSRC.twr || {})[key] || []) : ((OPSRC.jr || {})[key] || []);
+}
+
+// 整葉現值 {t, r, a}。站面文件序第 n 個帶 r 的單位＝r[n]（attach_ruby 單一指標依序消耗；
+//   掛不上的只會落在尾段）。站面與 opsrc 對不上（不同版產物）回 null＝不給整葉框。
+function wholeOldOf(arr) {
+  const units = wholeUnits(arr);
+  const r = wholeRubySrc(arr);
+  if (!units || !units.length || r == null) return null;
+  let pos = 0;
+  let n = 0;
+  const a = [];
+  for (const u of units) {
+    if (u.r) {
+      if (n >= r.length || String(r[n].c) !== String(u.u)) return null;
+      a.push(pos);
+      n += 1;
+    }
+    pos += cpLen(u.u);
+  }
+  while (a.length < r.length) a.push(null);
+  return { t: textOfUnits(units), r: clone(r), a };
+}
+
+// ── 編輯模型（純函式；DOM 層只負責畫與讀回）──
+// items：{b:true, el, c0, k0, pend, fresh}＝詞塊（一條注音）｜{b:false, s}＝散字（一個碼位）
+// lost ：掛不上的條（old.a 為 null）——要嘛掛到選取的散字上、要嘛刪掉，否則送不出去。
+function wholeModel(v) {
+  const items = [];
+  const lost = [];
+  const starts = [];
+  (v.a || []).forEach((p, k) => {
+    if (p == null) lost.push({ el: clone(v.r[k]) });
+    else starts.push([p, k]);
+  });
+  starts.sort((x, y) => x[0] - y[0]);
+  const chars = Array.from(String(v.t || ''));
+  let i = 0;
+  let si = 0;
+  while (i < chars.length) {
+    if (si < starts.length && starts[si][0] === i) {
+      const el = clone(v.r[starts[si][1]]);
+      items.push({ b: true, el, c0: el.c, k0: el.k, pend: false, fresh: false });
+      i += Math.max(1, cpLen(el.c));
+      si += 1;
+      continue;
+    }
+    items.push({ b: false, s: chars[i] });
+    i += 1;
+  }
+  return { items, lost };
+}
+function wholeValue(m) {
+  let t = '';
+  let pos = 0;
+  const r = [];
+  const a = [];
+  for (const it of m.items) {
+    if (it.b) {
+      r.push(clone(it.el));
+      a.push(pos);
+      t += it.el.c;
+      pos += cpLen(it.el.c);
+    } else {
+      t += it.s;
+      pos += cpLen(it.s);
+    }
+  }
+  return { t, r, a };
+}
+function wInsert(m, idx, str) {                // ㈦ 散字增
+  const add = Array.from(String(str || '').replace(/[\r\n]/g, '')).map(s => ({ b: false, s }));
+  m.items.splice(idx, 0, ...add);
+  return m;
+}
+function wDelete(m, from, to) {                // ㈡㈦ 刪：詞塊整塊連注音一起走
+  m.items.splice(from, to - from);
+  return m;
+}
+function wAddRuby(m, from, to, el) {           // ㈤ 選取散字 → 加注音
+  const seg = m.items.slice(from, to);
+  if (!seg.length) return '請先在框裡選取要加注音的字。';
+  if (seg.some(x => x.b)) return '選取範圍裡已有帶注音的詞塊；加注音只對沒注音的字。';
+  const e = clone(el);
+  e.c = seg.map(x => x.s).join('');
+  m.items.splice(from, to - from, { b: true, el: e, c0: e.c, k0: e.k, pend: false, fresh: true });
+  return '';
+}
+function wSetBlock(m, idx, patch) {            // ㈢㈣ 詞塊改字／改注音
+  const it = m.items[idx];
+  if (!it || !it.b) return '那裡不是詞塊。';
+  const nc = (patch.c != null) ? String(patch.c) : it.el.c;
+  if (!nc) return '詞塊的字不得為空（要刪請按「刪除此詞塊」）。';
+  for (const k of Object.keys(patch)) {
+    if (k === 'c') continue;
+    if (k in it.el) it.el[k] = patch[k];
+  }
+  it.el.c = nc;
+  // ㈢ 改了字、注音沒動＝留舊值、標待確認（不擋送出）；注音也動了＝人已確認過讀音
+  it.pend = (nc !== it.c0) && (it.el.k === it.k0);
+  return '';
+}
+const W_NOTE_KEYS = ['ed', 'orig', 'note'];
+function wMerge(m, idx) {                      // ㈥ 相鄰兩塊合併：注音接起來、標待確認
+  const a = m.items[idx];
+  const b = m.items[idx + 1];
+  if (!a || !a.b) return '那裡不是詞塊。';
+  if (!b) return '這一塊後面沒有東西可以合併。';
+  if (!b.b) {
+    return `這一塊後面緊接的是沒注音的字「${b.s}」，不是詞塊：合併只收緊鄰的兩個詞塊`
+      + '（要讓這個字也帶注音，先選取它按「選取處加注音」）。';
+  }
+  if ('tone' in a.el || 'tone' in b.el) return '台文音節一個字一個音節，不合併。';
+  if (W_NOTE_KEYS.some(k => k in a.el || k in b.el)) return '帶校訂紀錄的詞塊不合併（請改用文字說明）。';
+  const el = { c: a.el.c + b.el.c, k: String(a.el.k || '') + String(b.el.k || '') };
+  m.items.splice(idx, 2, { b: true, el, c0: el.c, k0: el.k, pend: true, fresh: true });
+  return '';
+}
+function wSplit(m, idx, cut, k1, k2) {         // ㈥ 詞塊拆開：注音由人分兩半
+  const it = m.items[idx];
+  if (!it || !it.b) return '那裡不是詞塊。';
+  const cs = Array.from(it.el.c);
+  if (!(cut >= 1 && cut < cs.length)) return `拆開位置要在 1 到 ${cs.length - 1} 之間。`;
+  if (W_NOTE_KEYS.some(k => k in it.el)) return '帶校訂紀錄的詞塊不拆（請改用文字說明）。';
+  if (!String(k1 || '') || !String(k2 || '')) return '拆開後兩塊都要有注音。';
+  const e1 = clone(it.el);
+  const e2 = clone(it.el);
+  e1.c = cs.slice(0, cut).join('');
+  e2.c = cs.slice(cut).join('');
+  e1.k = String(k1);
+  e2.k = String(k2);
+  m.items.splice(idx, 1,
+    { b: true, el: e1, c0: e1.c, k0: e1.k, pend: false, fresh: true },
+    { b: true, el: e2, c0: e2.c, k0: e2.k, pend: false, fresh: true });
+  return '';
+}
+function wAttachLost(m, li, from, to) {        // 掛不上的條 → 掛到選取的散字上（補函第 16 條用例）
+  const lo = m.lost[li];
+  if (!lo) return '';
+  const seg = m.items.slice(from, to);
+  if (!seg.length) return '請先在框裡選取要掛上的字。';
+  if (seg.some(x => x.b)) return '選取範圍裡已有帶注音的詞塊。';
+  const el = clone(lo.el);
+  const c = seg.map(x => x.s).join('');
+  const pend = c !== el.c;
+  el.c = c;
+  m.items.splice(from, to - from, { b: true, el, c0: lo.el.c, k0: el.k, pend, fresh: false });
+  m.lost.splice(li, 1);
+  return '';
+}
+function wDropLost(m, li) { m.lost.splice(li, 1); return ''; }
+
+// 模型 → op（或 {err}）。驗證只做前置篩；正式判準在伺服器端的 validate_op。
+function wholeBuild(path, old, m) {
+  if (m.lost.length) {
+    return { err: `還有 ${m.lost.length} 條注音沒掛上（框下方灰色那幾條）：請選取要掛的字按「掛到選取處」，或刪掉。` };
+  }
+  const nv = wholeValue(m);
+  if (!nv.t.trim()) return { err: '整葉不得為空。' };
+  if (/[\r\n]/.test(nv.t)) return { err: '修正值不得含換行。' };
+  if (cpLen(nv.t) > 300) return { err: '修正值過長（>300 字元）＝疑似整段重寫，請改用文字說明。' };
+  if (m.items.some(x => x.b && x.fresh && !String(x.el.k || ''))) {
+    return { err: '新加的詞塊要有注音（雙擊該詞塊輸入）。' };
+  }
+  if (nv.t === old.t && JSON.stringify(nv.r) === JSON.stringify(old.r)) return { err: '沒有改到東西。' };
+  return { op: { path: pathToArr(path), old, new: nv } };
+}
+
+// 疊加層：整葉 op 的新值 → 站面單位（起點取 op 自帶的 a；不在瀏覽器重跑 attach_ruby）
+function wholeUnitsView(v) {
+  const m = wholeModel(v);
+  return m.items.map(it => (it.b
+    ? { u: it.el.c, r: { k: it.el.k, tn: tnOf(it.el), lang: ('tone' in it.el) ? 'tw' : 'jp' } }
+    : { u: it.s }));
+}
+
+// ── 整葉框的 DOM 層 ──
+let WM = null;          // 目前框裡的模型
+let WREG = [];          // 詞塊登記表（DOM 的 data-wi 指這裡）
+let WSEL = -1;          // 正在小編輯器裡改的詞塊（items 索引）
+
+function wBlockHTML(it, wi) {
+  const tn = tnOf(it.el);
+  const rt = esc(it.el.k || '') + (tn ? `<sup class="tn">${esc(tn)}</sup>` : '');
+  return `<span class="wblk${it.pend ? ' pend' : ''}${it.fresh ? ' fresh' : ''}" contenteditable="false" data-wi="${wi}"`
+    + ` title="${it.pend ? '改了字、注音還是舊的（待確認）；雙擊可改' : '雙擊改字或注音'}">`
+    + `<ruby>${esc(it.el.c)}<rt>${rt}</rt></ruby></span>`;
+}
+function wRender() {
+  const box = $('#edwtext');
+  if (!box || !WM) return;
+  WREG = [];
+  let h = '';
+  let run = '';
+  for (const it of WM.items) {
+    if (it.b) {
+      if (run) { h += esc(run); run = ''; }
+      WREG.push(it);
+      h += wBlockHTML(it, WREG.length - 1);
+    } else {
+      run += it.s;
+    }
+  }
+  if (run) h += esc(run);
+  box.innerHTML = h;
+  const lost = $('#edwlost');
+  if (lost) {
+    lost.innerHTML = WM.lost.length
+      ? '<span class="src">沒掛上的注音：</span>' + WM.lost.map((lo, i) =>
+        `<span class="wlost">${esc(lo.el.c)}／${esc(lo.el.k || '（空）')}`
+        + `<button type="button" data-lost="${i}" data-act="attach">掛到選取處</button>`
+        + `<button type="button" data-lost="${i}" data-act="drop">刪掉</button></span>`).join('')
+      : '';
+  }
+  const pend = WM.items.filter(x => x.b && x.pend).length;
+  if ($('#edwstat')) {
+    $('#edwstat').textContent = pend ? `有 ${pend} 個詞塊改了字、注音還是舊的（橘色）：送出前請確認讀音，不改也可以送。` : '';
+  }
+}
+
+// DOM → items。文字節點＝散字；`.wblk`＝詞塊（同一塊第二次出現＝複製貼上的副本，當散字）；
+//   其他元素（瀏覽器打字時可能包出 div／span）往下走；`<br>` 略過。
+function wParseNodes(nodes, out, seen) {
+  for (const nd of nodes || []) {
+    if (nd.nodeType === 3) {
+      for (const s of Array.from(String(nd.nodeValue || '').replace(/[\r\n]/g, ''))) out.push({ b: false, s });
+      continue;
+    }
+    if (nd.nodeType !== 1) continue;
+    const wi = nd.getAttribute ? nd.getAttribute('data-wi') : null;
+    if (wi != null && WREG[+wi] && !seen.has(+wi)) {
+      seen.add(+wi);
+      out.push(WREG[+wi]);
+      continue;
+    }
+    if (wi != null) {                            // 副本：只留它的字
+      const it = WREG[+wi];
+      for (const s of Array.from(String(it ? it.el.c : ''))) out.push({ b: false, s });
+      continue;
+    }
+    if ((nd.tagName || '').toUpperCase() === 'BR') continue;
+    wParseNodes(nd.childNodes, out, seen);
+  }
+  return out;
+}
+function wSync() {
+  const box = $('#edwtext');
+  if (box && WM) WM.items = wParseNodes(box.childNodes, [], new Set());
+}
+// DOM 位置 → items 索引（文字節點每個碼位一格、詞塊一格）
+function wIsBlk(nd) { return nd.nodeType === 1 && nd.getAttribute && nd.getAttribute('data-wi') != null; }
+function wIndexOf(box, node, offset) {
+  let idx = 0;
+  let res = -1;
+  const visit = nd => {
+    if (nd === node) {
+      if (nd.nodeType === 3) {
+        res = idx + cpLen(String(nd.nodeValue || '').slice(0, offset).replace(/[\r\n]/g, ''));
+        return true;
+      }
+      let k = 0;                                   // 元素節點：offset＝第幾個子節點之前
+      for (const ch of nd.childNodes) {
+        if (k >= offset) break;
+        idx += wCount(ch);
+        k += 1;
+      }
+      res = idx;
+      return true;
+    }
+    if (nd.nodeType === 3) { idx += cpLen(String(nd.nodeValue || '').replace(/[\r\n]/g, '')); return false; }
+    if (nd.nodeType !== 1) return false;
+    if (wIsBlk(nd)) {
+      if (nd.contains && nd.contains(node)) { res = idx; return true; }   // 選取落在詞塊裡＝該塊之前
+      idx += 1;
+      return false;
+    }
+    for (const ch of nd.childNodes) if (visit(ch)) return true;
+    return false;
+  };
+  visit(box);
+  return res;
+}
+function wCount(nd) {
+  if (nd.nodeType === 3) return cpLen(String(nd.nodeValue || '').replace(/[\r\n]/g, ''));
+  if (nd.nodeType !== 1) return 0;
+  if (wIsBlk(nd)) return 1;
+  let n = 0;
+  for (const ch of nd.childNodes) n += wCount(ch);
+  return n;
+}
+function wSelection() {
+  const box = $('#edwtext');
+  const sel = window.getSelection ? window.getSelection() : null;
+  if (!box || !sel || !sel.rangeCount) return null;
+  const rg = sel.getRangeAt(0);
+  if (!box.contains(rg.startContainer) || !box.contains(rg.endContainer)) return null;
+  const a = wIndexOf(box, rg.startContainer, rg.startOffset);
+  const b = wIndexOf(box, rg.endContainer, rg.endOffset);
+  if (a < 0 || b < 0) return null;
+  return [Math.min(a, b), Math.max(a, b)];
+}
+function wHint(msg) { if ($('#edithint')) $('#edithint').textContent = msg || ''; }
+
+// C338（操作者本機實測回報）：在框裡用鍵盤刪掉／蓋掉一個詞塊＝那條注音跟著刪（補函 ㈡），但人多半是
+//   想「改字」（先刪再打），注音就這樣靜靜沒了——改字留舊注音要從「雙擊詞塊→字欄」做。
+//   ⇒ 每次鍵盤輸入前先留一份快照；輸入後若有詞塊不見了，框下方立刻講清楚刪了哪幾條注音，並給「復原」。
+let W_SNAP = null;      // 最近一次輸入之前的 items／lost
+let W_UNDO = null;      // 刪掉詞塊那一次輸入之前的快照（「復原」回到這裡）
+function wGoneBlocks(prevItems, nowItems) {
+  const now = new Set((nowItems || []).filter(x => x.b));
+  return (prevItems || []).filter(x => x.b && !now.has(x));
+}
+function wGoneNote(gone) {
+  const el = $('#edwgone');
+  if (!el) return;
+  if (!gone || !gone.length) { el.innerHTML = ''; el.classList.remove('on'); return; }
+  el.innerHTML = `剛才刪掉了帶注音的詞塊：${gone.map(x => `「${esc(x.el.c)}／${esc(x.el.k || '（空）')}」`).join('')}，`
+    + '注音也一起刪了。若是要<b>改字</b>而不是刪詞：按「復原」，再雙擊該詞塊、在「字」欄改。'
+    + '<button type="button" id="edwundo">復原</button>';
+  el.classList.add('on');
+}
+function wCheckGone(prev) {
+  const gone = wGoneBlocks(prev.items, WM.items);
+  if (gone.length) { W_UNDO = prev; wGoneNote(gone); }
+}
+function wNewEl(path) {                       // 新加的注音：台文例句＝音節形，其餘＝日文形
+  return /\.tw$/.test(path) ? { c: '', k: '', tone: '', nasal: false, asp: false } : { c: '', k: '' };
+}
+function wOpenBlock(idx) {
+  const it = WM && WM.items[idx];
+  const pane = $('#edwblk');
+  if (!it || !it.b || !pane) return;
+  WSEL = idx;
+  $('#edwc').value = it.el.c;
+  $('#edwk').value = String(it.el.k || '');
+  const tw = 'tone' in it.el;
+  $('#edwtw').style.display = tw ? '' : 'none';
+  if (tw) {
+    $('#edwtone').value = String(it.el.tone == null ? '' : it.el.tone);
+    $('#edwnasal').checked = !!it.el.nasal;
+    $('#edwasp').checked = !!it.el.asp;
+  }
+  $('#edwk2').value = '';
+  $('#edwcut').value = '1';
+  pane.classList.add('on');
+  $('#edwk').focus();
+}
+function wCloseBlock() {
+  WSEL = -1;
+  if ($('#edwblk')) $('#edwblk').classList.remove('on');
+}
+function wAfter(msg) { wHint(msg); if (!msg) { wCloseBlock(); wRender(); } }
+function wBind() {
+  const box = $('#edwtext');
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = '1';
+  box.addEventListener('keydown', ev => { if (ev.key === 'Enter') ev.preventDefault(); });
+  box.addEventListener('beforeinput', () => {
+    if (WM) W_SNAP = { items: wParseNodes(box.childNodes, [], new Set()), lost: WM.lost.slice() };
+  });
+  box.addEventListener('input', () => {
+    if (!WM || !W_SNAP) return;
+    WM.items = wParseNodes(box.childNodes, [], new Set());
+    wCheckGone(W_SNAP);
+    W_SNAP = null;
+  });
+  box.addEventListener('paste', ev => {
+    ev.preventDefault();
+    const txt = ((ev.clipboardData && ev.clipboardData.getData('text/plain')) || '').replace(/[\r\n]+/g, '');
+    const s = wSelection();
+    wSync();
+    const prev = { items: WM.items.slice(), lost: WM.lost.slice() };
+    if (s) { wDelete(WM, s[0], s[1]); wInsert(WM, s[0], txt); wRender(); wCheckGone(prev); }
+  });
+  $('#edwgone').addEventListener('click', ev => {
+    if (!ev.target.closest('#edwundo') || !W_UNDO) return;
+    WM.items = W_UNDO.items;
+    WM.lost = W_UNDO.lost;
+    W_UNDO = null;
+    wGoneNote(null);
+    wCloseBlock();
+    wRender();
+  });
+  box.addEventListener('dblclick', ev => {
+    const blk = ev.target.closest && ev.target.closest('.wblk');
+    if (!blk) return;
+    ev.preventDefault();
+    wSync();
+    wOpenBlock(WM.items.indexOf(WREG[+blk.getAttribute('data-wi')]));
+  });
+  $('#edwadd').addEventListener('click', () => {
+    const s = wSelection();
+    if (!s) { wHint('請先在框裡選取要加注音的字。'); return; }
+    wSync();
+    const msg = wAddRuby(WM, s[0], s[1], wNewEl(editSlot.path));
+    if (msg) { wHint(msg); return; }
+    wHint('');
+    wRender();
+    wOpenBlock(s[0]);
+  });
+  $('#edwlost').addEventListener('click', ev => {
+    const btn = ev.target.closest('button[data-lost]');
+    if (!btn) return;
+    const li = +btn.dataset.lost;
+    if (btn.dataset.act === 'drop') { wSync(); wDropLost(WM, li); wAfter(''); return; }
+    const s = wSelection();
+    if (!s) { wHint('請先在框裡選取要掛上的字。'); return; }
+    wSync();
+    wAfter(wAttachLost(WM, li, s[0], s[1]));
+  });
+  $('#edwok').addEventListener('click', () => {
+    if (WSEL < 0) return;
+    const it = WM.items[WSEL];
+    const p = { c: $('#edwc').value.trim(), k: $('#edwk').value.trim() };
+    if (it && 'tone' in it.el) {
+      p.tone = $('#edwtone').value;
+      if ('nasal' in it.el) p.nasal = $('#edwnasal').checked;
+      if ('asp' in it.el) p.asp = $('#edwasp').checked;
+    }
+    wAfter(wSetBlock(WM, WSEL, p));
+  });
+  $('#edwdel').addEventListener('click', () => { if (WSEL >= 0) { wDelete(WM, WSEL, WSEL + 1); wAfter(''); } });
+  $('#edwmerge').addEventListener('click', () => { if (WSEL >= 0) wAfter(wMerge(WM, WSEL)); });
+  $('#edwsplit').addEventListener('click', () => {
+    if (WSEL < 0) return;
+    wAfter(wSplit(WM, WSEL, parseInt($('#edwcut').value, 10), $('#edwk').value.trim(), $('#edwk2').value.trim()));
+  });
+}
+
 // ── 雙擊的元素 → 槽位描述 ──────────────────────────────────────────────────
 // 回 {mode, path, old, host}；mode ∈ syl（音節）／leaf（文字葉）／sep（切換鈕）／desc（描述）。
 // **產不出 op 一律回 desc**——定案 §四 場 2 之 3 的「自動退描述模式並提示」。
@@ -1167,6 +1628,18 @@ function describeSlot(el) {
     const tok = OPSRC && Array.isArray(OPSRC.kana) ? OPSRC.kana[i] : null;
     if (!tok) return Object.assign(base, { why: '拿不到這個音節的原值（opsrc 未載入）' });
     return { mode: 'syl', path: `head.kana[${i}]`, old: tok, editPath, host, why: '' };
+  }
+
+  // C338（U116 補函第 5 條 ㈠）：帶注音的文字葉（釋義／例句台文／例句日文）——雙擊該葉任何一個字，
+  //   有注音、沒注音都一樣，開同一個整葉框。opsrc 沒載到或與站面對不上＝退回下面的舊路徑。
+  const wHost = el.closest('[data-v2]');
+  if (wHost) {
+    const wp = wHost.dataset.v2 || '';
+    const wa = pathToArr(wp);
+    if (isWholePath(wa)) {
+      const old = wholeOldOf(wa);
+      if (old && old.t) return { mode: 'whole', path: wp, old, editPath, host, why: '' };
+    }
   }
 
   const rb = el.closest('.rb[data-ri]');
@@ -1209,7 +1682,7 @@ function describeSlot(el) {
 const SYMS = ['□', 'ーー', '〳〵', '、', '。', '・', '「', '」'];
 
 function showPane(mode) {
-  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdesc']) {
+  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdesc', 'editwhole']) {
     const el = $('#' + id);
     if (el) el.classList.toggle('on', id === 'edit' + mode);
   }
@@ -1223,7 +1696,13 @@ function openEdit(el) {
   // C326：這一格已有排隊中的修正 ⇒ old 取疊加後的淨結果，不取已發布的原值。
   //   定案 §二 14「疊完可再修（新 op 的 old＝前一筆的 new）」；原本取原值 ⇒ 第二筆的 old
   //   對不上鏈、疊加層靜靜不畫，每小時工作套用時也對不上而退卡。
-  const pend = s.path ? PATCHES.find(p => patchPathStr(p.op.path) === s.path) : null;
+  let pend = s.path ? PATCHES.find(p => patchPathStr(p.op.path) === s.path) : null;
+  if (pend && s.mode === 'whole' && !isWholeVal(pend.op.new)) {
+    // C338：同一葉只許一種 op 排隊（補函第 9 條③）。排著的是舊型（字串葉）修正 ⇒ 整葉框的 old
+    //   接不上它的鏈 ⇒ 這一次退描述模式，等它上站後再用整葉框改。
+    Object.assign(s, { mode: 'desc', why: '這一葉已有排隊中的舊型修正，等它上站後再用整葉框改' });
+    pend = null;
+  }
   if (pend) s.old = pend.op.new;
   $('#editctx').textContent = s.path
     ? `條目 ${entryId}／槽位 ${s.path}`
@@ -1245,6 +1724,13 @@ function openEdit(el) {
     $('#editnew').value = s.old;
     $('#edsyms').innerHTML = SYMS.map(
       c => `<button type="button" class="symbtn" data-sym="${esc(c)}">${esc(c)}</button>`).join('');
+  } else if (s.mode === 'whole') {
+    WM = wholeModel(s.old);
+    W_SNAP = null;
+    W_UNDO = null;
+    wGoneNote(null);
+    wCloseBlock();
+    wRender();
   } else if (s.mode === 'sep') {
     const opts = [['', '無（一般連寫）'], ['--', '-- 輕聲'], ['|', '| 詞界']];
     $('#edsepbtns').innerHTML = opts.map(([v, lab]) =>
@@ -1260,7 +1746,8 @@ function openEdit(el) {
   }
   showPane(s.mode);
   $('#editbox').classList.add('on');
-  const first = { syl: '#edkana', leaf: '#editnew', sep: '#edsepbtns', desc: '#editdesctext' }[s.mode];
+  const first = { syl: '#edkana', leaf: '#editnew', sep: '#edsepbtns', desc: '#editdesctext',
+                  whole: '#edwtext' }[s.mode];
   const f = $(first);
   if (f && f.focus) f.focus();
 }
@@ -1325,6 +1812,11 @@ function sameToken(a, b) {
 function buildOp() {
   const s = editSlot;
   if (!s || s.mode === 'desc') return null;
+  if (s.mode === 'whole') {
+    if (!isWholePath(pathToArr(s.path)) || !WM) return null;
+    wSync();
+    return wholeBuild(s.path, s.old, WM);
+  }
   const arr = pathToArr(s.path);
   const kind = opKind(s.path);
   if (!arr || !kind) return null;
@@ -1373,7 +1865,7 @@ async function submitEdit() {
     if (!b) { $('#edithint').textContent = '這一處產不出機器可讀的改法。'; return; }
     if (b.err) { $('#edithint').textContent = b.err; return; }
     op = b.op;
-    after = (s.mode === 'syl') ? tokDisp(op.new) : String(op.new);
+    after = (s.mode === 'syl') ? tokDisp(op.new) : (s.mode === 'whole') ? op.new.t : String(op.new);
   }
   // 「原書印面本身有誤」永遠走裁決（定案 §二 12）——不是快車道，但 op 照送：
   //   站主看得到機器可讀的改法，只是不自動套。
@@ -1388,7 +1880,8 @@ async function submitEdit() {
     id: entryId,
     block: s.editPath || '',
     path: s.path || s.editPath || '',
-    before: (s.mode === 'syl') ? tokDisp(s.old) : (s.old == null ? '' : String(s.old)),
+    before: (s.mode === 'syl') ? tokDisp(s.old) : (s.mode === 'whole') ? s.old.t
+      : (s.old == null ? '' : String(s.old)),
     after,
     note,
     cat: '原冊改錯字',
@@ -1445,7 +1938,17 @@ function patchBadge(p) {
     w.className = 'patchundo';
     w.href = '#';
     w.textContent = '撤回';
-    w.addEventListener('click', ev => { ev.preventDefault(); withdraw(p); });
+    // C338：頁內兩段式確認（不用 confirm()，理由見 withdraw）：第一下變「再按一次確定撤回」，4 秒內再按才送
+    w.addEventListener('click', ev => {
+      ev.preventDefault();
+      if (w.dataset.armed === 'busy') return;
+      if (w.dataset.armed === '1') { withdraw(p, w); return; }
+      w.dataset.armed = '1';
+      w.textContent = '再按一次確定撤回';
+      setTimeout(() => {
+        if (w.dataset.armed === '1') { w.dataset.armed = ''; w.textContent = '撤回'; }
+      }, 4000);
+    });
     b.appendChild(w);
   }
   return b;
@@ -1490,7 +1993,13 @@ function paintPatch(p, live) {
   if (!els.length) return false;
   const last = arr[arr.length - 1];
   for (const el of els) {
-    if (arr[0] === 'head' && arr[1] === 'kana') {
+    if (isWholeVal(p.op.new)) {
+      // C338：整葉 op 帶著起點 ⇒ 原冊區照 op 自帶的位置畫注音（不在瀏覽器重跑 attach_ruby）；
+      //   現代化區（`gloss_modern`，畫的是 POJ）只換純文字、注音等整點發布後由 export 重畫。
+      const ed = el.getAttribute('data-edit') || '';
+      if (/\.gloss_modern$/.test(ed)) el.textContent = String(p.op.new.t);
+      else el.innerHTML = unitsHTML(wholeUnitsView(p.op.new), false);
+    } else if (arr[0] === 'head' && arr[1] === 'kana') {
       const em = el.querySelector('sup.em');
       const tn = tnOf(p.op.new);
       el.innerHTML = esc(String(p.op.new.k || '')) + (tn ? `<sup class="tn">${esc(tn)}</sup>` : '');
@@ -1527,7 +2036,7 @@ function netPatches(rows, baseOf, same, me) {
     if (!op || !Array.isArray(op.path)) continue;
     const key = op.path.join('\u0001');
     const g = groups.get(key);
-    const base = g ? g.cur : baseOf(op.path);
+    const base = g ? g.cur : baseOf(op.path, op);   // C338：整葉 op 的 base 要整葉現值（看 op 型別取）
     if (base != null && !same(base, op.old)) {
       console.warn('疊加層：old 對不上目前值，該筆不畫', r.fid, op.path.join('.'));
       continue;
@@ -1577,8 +2086,8 @@ async function loadPatches() {
     try { op = JSON.parse(row.op); } catch (e) { continue; }
     rows.push({ fid: row.fid, op, status: row.status, reporter: row.reporter });
   }
-  const baseOf = path => (opKind(path.join('.').replace(/\.(\d+)/g, '[$1]')) === 'token'
-                          ? null : leafOld(path));
+  const baseOf = (path, op) => (isWholeVal(op && op.old) ? wholeOldOf(path)
+    : opKind(path.join('.').replace(/\.(\d+)/g, '[$1]')) === 'token' ? null : leafOld(path));
   for (const p of netPatches(rows, baseOf, sameVal, TEAM.on ? TEAM.name : '')) {
     if (paintPatch(p, false)) PATCHES.push(p);
   }
@@ -1586,15 +2095,18 @@ async function loadPatches() {
 
 // 撤回＝送一筆反向 op（定案 §二 14）。只對自己送的、還沒上站（queued）那些開放。
 // C326：p 是 netPatches 合成的淨結果 ⇒ 反向 op 一步回到原值（不是只退最後一筆）。
-async function withdraw(p) {
+// C338：確認改在頁內做（`patchBadge` 的兩段式按鈕），**不用 `confirm()`**——瀏覽器的對話框
+//   會被靜默擋掉而回 false（app 內嵌瀏覽器窗格、或使用者勾過「不要讓此頁再顯示對話框」），
+//   撤回就一按沒反應、也不告訴人為什麼（C338 操作者本機實測回報；窗格內 confirm() 1ms 回 false）。
+async function withdraw(p, link) {
   if (!TEAM.on) return;
   const fids = (p.fids || [p.fid]).join('、');
-  if (!confirm(`撤回這一格的修正（fid ${fids}）？畫面會回到原值。`)) return;
+  if (link) { link.textContent = '撤回中…'; link.dataset.armed = 'busy'; }
   const rec = {
     source: 'website', ts: new Date().toISOString(), id: entryId,
     path: p.op.path.join('.').replace(/\.(\d+)/g, '[$1]'),
-    before: typeof p.op.new === 'string' ? p.op.new : tokDisp(p.op.new),
-    after: typeof p.op.old === 'string' ? p.op.old : tokDisp(p.op.old),
+    before: typeof p.op.new === 'string' ? p.op.new : isWholeVal(p.op.new) ? p.op.new.t : tokDisp(p.op.new),
+    after: typeof p.op.old === 'string' ? p.op.old : isWholeVal(p.op.old) ? p.op.old.t : tokDisp(p.op.old),
     note: `撤回 fid ${fids}`,
     cat: '原冊改錯字', fixkind: '數位化打錯',
     op: JSON.stringify({ path: p.op.path, old: p.op.new, new: p.op.old }),
@@ -1608,10 +2120,10 @@ async function withdraw(p) {
     });
     const j = r.ok ? await r.json() : null;
     if (!j || !j.ok) throw new Error('bad');
-    alert('撤回已送出，畫面回到原值。');
+    if (link) link.textContent = '已撤回，重新整理中…';
     location.reload();
   } catch (e) {
-    alert('撤回送不出去，請稍後再試。');
+    if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
   }
 }
 
@@ -1756,6 +2268,7 @@ async function init() {
   }
   // ── C324：團隊登入與三種編輯器的接線 ──
   if ($('#teambtn')) $('#teambtn').addEventListener('click', teamToggle);
+  if ($('#edwtext')) wBind();                  // C338：整葉注音編輯器
   if ($('#edsyms')) {
     $('#edsyms').addEventListener('click', ev => {
       const b = ev.target.closest('.symbtn');

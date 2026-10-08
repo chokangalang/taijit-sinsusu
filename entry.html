@@ -62,7 +62,9 @@
        editsyl ＝音節編輯器（假名／調號／鼻音／送氣＋POJ 即時換算）
        editleaf＝文字葉編輯器（整葉值＋符號鈕）
        editsep ＝head.sep[i] 切換鈕（無／--／|）
-       editdesc＝描述模式（產不出機器可讀改法時的正常出口，不是失敗） -->
+       editdesc＝描述模式（產不出機器可讀改法時的正常出口，不是失敗）
+     C338（U116，站主 M053 補函第 5 條）：
+       editwhole＝整葉注音編輯器（釋義／例句台文／例句日文：整葉文字＋注音清單一筆送出） -->
 <div id="editbox">
   <div class="panel">
     <h2>校對修正</h2>
@@ -93,6 +95,46 @@
       <label class="src">修正值</label>
       <textarea id="editnew"></textarea>
       <div id="edsyms" class="edsyms"></div>
+    </div>
+
+    <div id="editwhole" class="edpane">
+      <p class="src">整葉＝這一欄的文字連同注音一起改、一次送出。沒注音的字直接打字增刪改；
+        帶注音的字是一整塊（藍底），刪、搬時注音跟著走。雙擊一塊改字、改注音、合併或拆開；
+        選取幾個沒注音的字可「加注音」。</p>
+      <div id="edwtext" class="edwtext" contenteditable="true" spellcheck="false"></div>
+      <div class="edrow">
+        <button type="button" id="edwadd">選取處加注音</button>
+        <span class="src" id="edwstat"></span>
+      </div>
+      <div id="edwgone" class="edwgone"></div>
+      <div id="edwlost" class="edwlost"></div>
+      <div id="edwblk" class="edwblk">
+        <div class="edrow">
+          <label class="src">字 <input id="edwc" type="text" maxlength="12" autocomplete="off" spellcheck="false"></label>
+          <label class="src">注音（片假名） <input id="edwk" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="edrow" id="edwtw">
+          <label class="src">調號
+            <select id="edwtone">
+              <option value="">（空）</option>
+              <option>1</option><option>2</option><option>3</option><option>4</option>
+              <option>5</option><option>7</option><option>8</option>
+            </select>
+          </label>
+          <label class="src"><input id="edwnasal" type="checkbox"> 鼻音</label>
+          <label class="src"><input id="edwasp" type="checkbox"> 送氣</label>
+        </div>
+        <div class="edrow">
+          <button type="button" id="edwok">套用</button>
+          <button type="button" id="edwdel">刪除此詞塊</button>
+          <button type="button" id="edwmerge">與後一塊合併</button>
+        </div>
+        <div class="edrow">
+          <label class="src">拆開：第 <input id="edwcut" type="number" min="1" value="1"> 字之後；
+            前半注音用上面那格，後半注音 <input id="edwk2" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+          <button type="button" id="edwsplit">拆開</button>
+        </div>
+      </div>
     </div>
 
     <div id="editsep" class="edpane">
