@@ -332,15 +332,34 @@ function blockImages(e) {
   </section>`;
 }
 
+// 本義項的行內參照（ref.sense_i＝本義項；舊資料以 r.senses＝圈碼對應）——senseHTML 與 collectOrig 共用
+function senseRefs(e, i, mk) {
+  return ((e && e.refs) || []).map((r, ri) => ({ r, ri }))
+    .filter(x => (typeof x.r.sense_i === 'number' ? x.r.sense_i === i : x.r.senses && x.r.senses === mk));
+}
+// 參照槽之原冊層純文字（照 refLineInner 非現代化分支：槽前註＋＝〔…〕；槽後註不含——orig.was 只記到槽為止）
+function refPrintText(r) {
+  const pre = r.pre_note ? `（${r.pre_note}）`
+            : ((r.note && r.note_pos === 'before') ? `（${r.note}）` : '');
+  const inNote = (r.note && r.note_pos === 'in') ? r.note : '';
+  return `${pre}＝〔${textOfUnits(r.kanji)}${inNote}〕`;
+}
+
 function senseHTML(s, i, total, modern, zhStatus, e) {
   const mk = markerOf(s, i, total);
   const base = `senses[${i}]`;
+  const srefs = senseRefs(e, i, mk);
   let gloss;
+  let gemAfterRefs = '';
   if (!modern) {
     // M030：gloss 級文字校改存印（SCHEMA_V2 §orig 文字級擴至 gloss）——只標原冊數位化層，現代化層不標
     const gem = (s.orig && s.orig.at === 'jp')
       ? `<sup class="em" title="校改存印：原印面「${esc(s.orig.was)}」｜${esc(s.orig.note)}">†</sup>` : '';
-    gloss = `<span class="gloss"${editAttr(base + '.gloss')}${v2Attr(base + '.gloss.jp', base + '.gloss.ruby', 'leaf')}${origAttr(textOfUnits(s.gloss), rubyDump(s.gloss, false))}>${unitsHTML(s.gloss, false)}${gem}</span>`;
+    // C368 病灶：純參照釋義（`（漳）＝〔販賣〕`）export 後 gloss 為空、本文落在 refs[]
+    //   ⇒ † 掛在空 gloss 上會跑到參照前面；改掛在行內參照之後。其餘型（gloss 有字）不動。
+    const pureRef = !(s.gloss || []).length && srefs.length;
+    if (pureRef) gemAfterRefs = gem;
+    gloss = `<span class="gloss"${editAttr(base + '.gloss')}${v2Attr(base + '.gloss.jp', base + '.gloss.ruby', 'leaf')}${origAttr(textOfUnits(s.gloss), rubyDump(s.gloss, false))}>${unitsHTML(s.gloss, false)}${pureRef ? '' : gem}</span>`;
   } else if (s.zh) {
     gloss = `<span class="zh"${editAttr(base + '.zh')}${origAttr(s.zh, '')}>${zhHTML(s.zh, s.zh_units)}</span>`;
   } else if ((s.gloss || []).length) {
@@ -358,8 +377,7 @@ function senseHTML(s, i, total, modern, zhStatus, e) {
   }).join('');
   // sense 級參照內嵌：ref.sense_i＝本義項者直接放行內（2026-07-12 使用者補裁：不另立參照行）
   // r.senses＝目標圈碼（亦①、欲②④）→ 行內 chip 顯示
-  const inrefs = ((e && e.refs) || []).map((r, ri) => ({ r, ri }))
-    .filter(x => (typeof x.r.sense_i === 'number' ? x.r.sense_i === i : x.r.senses && x.r.senses === mk))
+  const inrefs = srefs
     .map(x => {
       const p = refLineInner(x.r, x.ri, modern, (e && e.head && e.head.dial) || '');
       const sn = x.r.senses ? `<span class="chip">${esc(x.r.senses)}</span>` : '';
@@ -389,7 +407,7 @@ function senseHTML(s, i, total, modern, zhStatus, e) {
   // M032：標記級校改存印（SCHEMA_V2 §orig 標記級；首例 p0163-2-07）——只標原冊數位化層；印面無標記時 was 為 null → 顯示「（無）」
   const mkEm = (!modern && s.orig_marker)
     ? `<sup class="em" title="校改存印：原印面「${esc(origWasText(s.orig_marker))}」｜${esc(s.orig_marker.note)}">†</sup>` : '';
-  return `<div class="sense">${mk ? `<span class="marker">${esc(mk)}${mkEm}</span>` : mkEm}${gloss}${notes}${inrefs}${exs}</div>`;
+  return `<div class="sense">${mk ? `<span class="marker">${esc(mk)}${mkEm}</span>` : mkEm}${gloss}${notes}${inrefs}${gemAfterRefs}${exs}</div>`;
 }
 function origWasText(o) {               // M032：標記級 orig 之 was 可為 null（印面無標記）
   return (o && o.was != null && o.was !== '') ? o.was : '（無）';
@@ -489,7 +507,10 @@ function collectOrig(e) {
   const nSense = (e.senses || []).length;
   (e.senses || []).forEach((s, si) => {
     scan(s.gloss);
-    if (s.orig) out.push({ now: textOfUnits(s.gloss), orig: s.orig });   // M030：gloss 級文字校改存印
+    // M030：gloss 級文字校改存印。C368：純參照釋義 gloss 為空 ⇒ 現值退取本義項參照槽之照印文字
+    //   （否則圖例寫成 原印面「（漳）＝【販賣】」→「」）
+    if (s.orig) out.push({ now: textOfUnits(s.gloss)
+      || senseRefs(e, si, markerOf(s, si, nSense)).map(x => refPrintText(x.r)).join(''), orig: s.orig });
     if (s.orig_marker) out.push({ now: markerOf(s, si, nSense),          // M032：標記級（原印面「（無）」→「①」）
                                   orig: Object.assign({}, s.orig_marker, { was: origWasText(s.orig_marker) }) });
     (s.notes || []).forEach(n => scan(n.units));
