@@ -38,6 +38,7 @@
     </div>
     <div id="rann" class="rpane">
       <p class="src" id="rannpath"></p>
+      <p class="src" id="rannedit"></p>
       <div class="edrow">
         <label class="src">引文（選取的文字）<input id="rannquote" type="text" maxlength="200"></label>
         <label class="src">性質 <select id="rannkind"></select></label>
@@ -71,7 +72,7 @@
     <p class="src" id="editctx"></p>
 
     <div id="editsyl" class="edpane">
-      <label class="src">假名（片假名；· ＝送氣記號照印）</label>
+      <label class="src">假名（片假名；· ＝送氣記號照印；也可直接打 POJ，離開這格或按 Enter 自動換）</label>
       <input id="edkana" type="text" maxlength="16" autocomplete="off" spellcheck="false">
       <div class="edrow">
         <label class="src">調號
@@ -98,20 +99,48 @@
     </div>
 
     <div id="editwhole" class="edpane">
-      <p class="src">整葉＝這一欄的文字連同注音一起改、一次送出。沒注音的字直接打字增刪改；
-        帶注音的字是一整塊（藍底），刪、搬時注音跟著走。雙擊一塊改字、改注音、合併或拆開；
-        選取幾個沒注音的字可「加注音」。</p>
+      <!-- 2026-10-13 操作者交辦：操作說明全部集中在框頂（夥伴不必往下找）。 -->
+      <details class="edhelp" open>
+        <summary>操作說明（點這行可收合）</summary>
+        <ol>
+          <li><b>這個框改的是整句</b>：文字連同注音一起改，按最下面「送出」一次送出。</li>
+          <li><b>沒注音的字</b>（白底）：在框裡直接打字、刪字、改字，跟一般輸入一樣。</li>
+          <li><b>帶注音的字</b>（藍底一整塊）：不能直接打字。用鍵盤刪掉一整塊＝連注音一起刪（會跳出「復原」）。
+            要<b>改字或改注音</b>：<b>雙擊那一塊</b>，下方會出現小編輯器。</li>
+          <li><b>小編輯器</b>：改「字」或「注音」後按「套用」。台文詞塊的「注音」格可以<b>直接打 POJ 羅馬字</b>（例：chhun3），
+            離開這格、按 Enter 或按「套用」就自動換成片假名、調號、鼻音、送氣（下方「POJ」格也可以打）。</li>
+          <li><b>合併</b>：雙擊前一塊 →「與後一塊合併」（只合併兩個緊鄰的帶注音詞塊；台文一字一音節不合併）。</li>
+          <li><b>拆開</b>：只對<b>兩個字以上</b>的詞塊有用（例：動作／ドウサ → 動／ドウ＋作／サ）。
+            雙擊該塊 → 填「第幾個字之後拆」→ 分別填<b>前半注音</b>與<b>後半注音</b>（兩格都要有）→ 按「拆開」。
+            一個字的詞塊不能拆。</li>
+          <li><b>加注音</b>：用滑鼠選取幾個沒注音的字 → 按「選取處加注音」→ 在小編輯器填注音 →「套用」。</li>
+          <li><b>代替符「ー」</b>＝代替表頭的字，<b>表頭幾個字就幾個「ー」</b>。多一個就直接刪掉；
+            少一個或要換成輕聲「--」：把游標放在該位置（或選取要換掉的字），按下方符號鈕插入。</li>
+          <li>操作有問題時，<b>紅字提示</b>會出現在按鈕旁邊。</li>
+        </ol>
+      </details>
       <div id="edwtext" class="edwtext" contenteditable="true" spellcheck="false"></div>
       <div class="edrow">
         <button type="button" id="edwadd">選取處加注音</button>
         <span class="src" id="edwstat"></span>
       </div>
+      <div class="edrow edwsyms">
+        <span class="src">插入符號（取代選取處）：</span>
+        <span id="edwsyms" class="edsyms"></span>
+      </div>
+      <p class="src warn" id="edwmsg"></p>
       <div id="edwgone" class="edwgone"></div>
       <div id="edwlost" class="edwlost"></div>
       <div id="edwblk" class="edwblk">
         <div class="edrow">
           <label class="src">字 <input id="edwc" type="text" maxlength="12" autocomplete="off" spellcheck="false"></label>
-          <label class="src">注音（片假名） <input id="edwk" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+          <label class="src"><span id="edwklab">注音（片假名）</span> <input id="edwk" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <p class="src" id="edwkmsg"></p>
+        <div class="edrow" id="edwpojrow">
+          <label class="src">POJ（打羅馬字自動換成片假名）
+            <input id="edwpoj" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="例：chhun3"></label>
+          <span class="src" id="edwprev"></span>
         </div>
         <div class="edrow" id="edwtw">
           <label class="src">調號
@@ -129,11 +158,14 @@
           <button type="button" id="edwdel">刪除此詞塊</button>
           <button type="button" id="edwmerge">與後一塊合併</button>
         </div>
-        <div class="edrow">
-          <label class="src">拆開：第 <input id="edwcut" type="number" min="1" value="1"> 字之後；
-            前半注音用上面那格，後半注音 <input id="edwk2" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+        <div class="edrow" id="edwsplitrow">
+          <label class="src">拆開：第 <input id="edwcut" type="number" min="1" value="1"> 個字之後拆</label>
+          <label class="src">前半注音 <input id="edwk1" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
+          <label class="src">後半注音 <input id="edwk2" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>
           <button type="button" id="edwsplit">拆開</button>
         </div>
+        <p class="src" id="edwsplitno">這一塊只有一個字，不能拆開。</p>
+        <p class="src warn" id="edwblkmsg"></p>
       </div>
     </div>
 
@@ -149,6 +181,7 @@
       <textarea id="editdesctext"></textarea>
     </div>
 
+    <p class="src" id="editzhnote">這一欄是本站加的（POJ／中譯），不是原書內容，不必選「數位化打錯／原書印面有誤」；送出後歸「翻譯意見」。</p>
     <fieldset id="editfix">
       <legend class="src">這一筆是哪一種（必選）</legend>
       <label><input type="radio" name="edfix" value="數位化打錯"> 數位化打錯</label>

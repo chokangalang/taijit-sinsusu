@@ -533,23 +533,31 @@ function blockOriginal(e) {
 // 卡名「做工á人批注」＝KB 既有名稱（§九 參數表）；夾在「POJ＋日文中譯」與「原冊數位化」之間；
 // 無批注不渲染；`<details open>` 預設展開、摘要列帶計數、不記憶收攏狀態（§二 6）。
 // 署名＝**卡標題本身**，每則不標個人（§二 7）⇒ 資料層的 `by` 不上畫面；每則只標最後核定日（§二 8）。
+// 2026-10-13（操作者交辦第 6／7 點，已與站主談定）：團隊模式在批注卡上多「加注」「修改」兩種鈕，
+//   送出後走快車道（每小時工作直接寫進 annotations/ 上站），站主事後在快車道後審表追認或撤回。
+//   一般讀者畫面零變化（無批注仍不渲染、不出鈕）；團隊模式無批注時出一張空卡，只為了放「加注」鈕。
 function blockAnnots(e) {
   const an = e.annots || [];
-  if (!an.length) return '';                      // §二 6：無批注不渲染
+  if (!an.length && !TEAM.on) return '';          // §二 6：無批注不渲染（團隊模式例外：要放加注鈕）
   const items = an.map((a, i) => {
     const n = i + 1;
     // 編號回跳（§四 場 1 工項 3）：列號連回本文記號，記號連回本列
     const back = a.path ? `<a class="anback" href="#${esc(a.nid)}-m" title="回到本文記號">${n}</a>`
                         : `<span class="anback off">${n}</span>`;
     const dt = a.date ? `<span class="andate">${esc(a.date)}</span>` : '';
+    const ed = TEAM.on
+      ? `<button type="button" class="anbtn anedit" data-nid="${esc(a.nid)}" title="修改這則批注的文字或性質（快車道直接上站，站主事後追認）">修改</button>` : '';
     return `<li class="anitem" id="${esc(a.nid)}">${back}` +
            `<span class="ankind">${esc(a.kind)}</span>` +
-           `<span class="antext">${esc(a.text)}</span>${dt}</li>`;
+           `<span class="antext">${esc(a.text)}</span>${dt}${ed}</li>`;
   }).join('');
+  const add = TEAM.on
+    ? `<button type="button" class="anbtn anadd" title="先選取本文的文字（批注要掛在哪裡），再按這裡">加注</button>` : '';
+  const empty = an.length ? '' : '<p class="src">本條目尚無批注。要加注：先選取本文的文字，再按「加注」。</p>';
   return `<section class="card annots" data-blockname="批注">
     <details open>
-      <summary>做工á人批注<span class="ancnt">${an.length}</span></summary>
-      <ul class="anlist">${items}</ul>
+      <summary>做工á人批注<span class="ancnt">${an.length}</span>${add}</summary>
+      ${empty}<ul class="anlist">${items}</ul>
     </details>
   </section>`;
 }
@@ -783,8 +791,13 @@ const CAT_HINT = {
   //   留言要等下一次發布（C332 實查）。
   '留言': '留言會在下一次網站更新後出現在「留言」頁。站方不在留言頁回覆、'
         + '不保證回覆；有價值的意見會引用進「做工á人批注」。',
-  '批注': '批注草稿進收件匣，經站主核定（可改字）後才上站；卡標題即署名，不標個人。',
+  // 2026-10-13（第 6／7 點）：批注改快車道直改、站主事後追認（原本＝進收件匣、站主核定後才上站）
+  '批注': '批注走快車道：送出後由每小時工作直接上站（通常一小時內），站主事後追認；'
+        + '卡標題即署名，不標個人。',
 };
+// 修改既有批注：目標 nid 借 D1 既有的 `before` 欄送（批注列本來不用 before；不加 D1 欄、不動 Function）。
+//   形＝`pNNNN-S-NN-nK`；每小時工作（`fastlane_hourly`）據以判「加注」或「修改」。
+const ANNOT_NID_RE = /^p\d{4}-[123]-\d{2}-n\d+$/;
 
 function catForBlock(block) {
   return BLOCK_CAT[block] || '原冊改錯字';
@@ -863,6 +876,7 @@ function buildReportRec(o) {
     rec.path = o.path || '';
     rec.quote = o.quote || '';
     rec.fixkind = o.kind || '';
+    if (o.editNid) rec.before = o.editNid;        // 修改既有批注（見 ANNOT_NID_RE 註）
   }
   if (o.team) rec.token = o.token;
   else if (o.cfToken) rec.cf_turnstile = o.cfToken;
@@ -871,7 +885,8 @@ function buildReportRec(o) {
 
 // 送出前的空檢查：說明必填；原冊改錯字有「應為」也算有內容（伺服器端判準＝note 或 after 非空）。
 function reportEmptyWhy(o) {
-  if (o.cat === ANNOT_CAT && !o.path) return '批注草稿需要錨點：先選取本文的文字（或雙擊該欄）再開這個框。';
+  if (o.cat === ANNOT_CAT && o.editNid && !ANNOT_NID_RE.test(o.editNid)) return '要修改的批注編號不正確。';
+  if (o.cat === ANNOT_CAT && !o.path && !o.editNid) return '批注草稿需要錨點：先選取本文的文字（或雙擊該欄）再開這個框。';
   if (!o.note && !(o.cat === '原冊改錯字' && o.after)) return '請先描述內容。';
   return '';
 }
@@ -952,10 +967,21 @@ function openReport(block, eid, pre) {
   // 批注錨點：雙擊入口帶的優先，其次最近一次本文選取
   const src = (pre && pre.hostPath) ? pre : (LAST_SEL || {});
   reportAnn = annDraftAnchor(ENTRY, src.hostPath, !!src.inZh, (pre && pre.quote) || src.quote || '');
+  // 修改既有批注（第 6 點）：錨點沿用該則原本的 path／quote，本文與性質預填原值
+  const ed = (pre && pre.edit) || null;
+  reportAnn.nid = '';
+  if (ed) reportAnn = { path: ed.path || '', quote: ed.quote || '', nid: ed.nid || '' };
   $('#rannpath').textContent = reportAnn.path
-    ? `錨點：${reportAnn.path}` : '錨點：（未定——先選取本文的文字或雙擊該欄）';
+    ? `錨點：${reportAnn.path}`
+    : (ed ? '錨點：（條目級批注，沒有錨點）' : '錨點：（未定——先選取本文的文字或雙擊該欄）');
+  $('#rannedit').textContent = ed
+    ? `修改批注 ${ed.nid}：改好本文或性質後按「送出」（快車道直接上站，站主事後追認）。` : '';
   $('#rannquote').value = reportAnn.quote;
   $('#rannkind').innerHTML = ANNOT_KINDS_UI.map(k => `<option>${esc(k)}</option>`).join('');
+  if (ed) {
+    $('#rannkind').value = ed.kind || ANNOT_KINDS_UI[0];
+    $('#reporttext').value = ed.text || '';
+  }
   let cat = (pre && pre.cat) || catForBlock(block);
   if (cat === ANNOT_CAT && !TEAM.on) cat = COMMENT_CAT;
   setReportCat(cat);
@@ -978,6 +1004,7 @@ async function sendReport(eid) {
     reporter: TEAM.on ? '' : $('#reportname').value.trim(),
     before: $('#rbefore').value.trim(), after: $('#rafter').value.trim(),
     path: reportAnn.path, quote: $('#rannquote').value.trim(), kind: $('#rannkind').value,
+    editNid: (cat === ANNOT_CAT && reportAnn.nid) ? reportAnn.nid : '',
     team: TEAM.on, token: TEAM.token, cfToken: tsToken,
   };
   const why = reportEmptyWhy(o);
@@ -1000,6 +1027,8 @@ async function sendReport(eid) {
       alert('已送出，感謝留言！' + (unverified
         ? '\n（這則留言沒有通過自動驗證，站方看過之後才會出現在留言頁。）'
         : '\n下一次網站更新後會出現在「留言」頁。'));
+    } else if (cat === ANNOT_CAT) {
+      alert('批注已送出：每小時工作會直接上站（通常一小時內），站主事後追認。');
     } else {
       alert('已送出，感謝回報！');
     }
@@ -1299,7 +1328,7 @@ function wSplit(m, idx, cut, k1, k2) {         // ㈥ 詞塊拆開：注音由�
   const cs = Array.from(it.el.c);
   if (!(cut >= 1 && cut < cs.length)) return `拆開位置要在 1 到 ${cs.length - 1} 之間。`;
   if (W_NOTE_KEYS.some(k => k in it.el)) return '帶校訂紀錄的詞塊不拆（請改用文字說明）。';
-  if (!String(k1 || '') || !String(k2 || '')) return '拆開後兩塊都要有注音。';
+  if (!String(k1 || '') || !String(k2 || '')) return '拆開後兩塊都要有注音：「前半注音」與「後半注音」兩格都要填。';
   const e1 = clone(it.el);
   const e2 = clone(it.el);
   e1.c = cs.slice(0, cut).join('');
@@ -1476,7 +1505,13 @@ function wSelection() {
   if (a < 0 || b < 0) return null;
   return [Math.min(a, b), Math.max(a, b)];
 }
-function wHint(msg) { if ($('#edithint')) $('#edithint').textContent = msg || ''; }
+// 2026-10-13（操作者交辦第 3 點）：提示原本只寫在框底 `#edithint`（備註欄下方），框一捲動就看不到
+//   ⇒「拆開」被擋時像是按了沒反應。改寫在按鈕旁：小編輯器開著＝寫在小編輯器裡，否則寫在框頂按鈕列下。
+function wHint(msg) {
+  const inBlk = !!($('#edwblk') && $('#edwblk').classList.contains('on'));
+  if ($('#edwblkmsg')) $('#edwblkmsg').textContent = inBlk ? (msg || '') : '';
+  if ($('#edwmsg')) $('#edwmsg').textContent = inBlk ? '' : (msg || '');
+}
 
 // C338（操作者本機實測回報）：在框裡用鍵盤刪掉／蓋掉一個詞塊＝那條注音跟著刪（補函 ㈡），但人多半是
 //   想「改字」（先刪再打），注音就這樣靜靜沒了——改字留舊注音要從「雙擊詞塊→字欄」做。
@@ -1517,14 +1552,128 @@ function wOpenBlock(idx) {
     $('#edwnasal').checked = !!it.el.nasal;
     $('#edwasp').checked = !!it.el.asp;
   }
-  $('#edwk2').value = '';
+  // 拆開：前半／後半注音各一格（原本前半借用上面「注音」格＝要先手動刪掉後半，沒人看得懂）；
+  //   一個字的詞塊拆不了＝不顯示拆開列、改顯示一句說明。
+  const nc = cpLen(it.el.c);
+  pane.classList.toggle('single', nc < 2);
+  $('#edwcut').max = String(Math.max(1, nc - 1));
   $('#edwcut').value = '1';
+  $('#edwk1').value = String(it.el.k || '');
+  $('#edwk2').value = '';
+  // POJ 自動換算（第 5 點）：只給台文音節詞塊（日文注音不是 POJ）
+  $('#edwpojrow').style.display = tw ? '' : 'none';
+  // 2026-10-14（操作者截圖：在日文注音詞塊「表ハス」打 khah）：欄名依詞塊類別講清楚
+  $('#edwklab').textContent = tw ? '台語注音（片假名；可直接打 POJ）'
+    : '日文注音（片假名；可直接打 POJ，只換假名、不帶調號）';
+  $('#edwpoj').value = '';
+  $('#edwprev').textContent = '';
+  if ($('#edwblkmsg')) $('#edwblkmsg').textContent = '';
+  if ($('#edwkmsg')) $('#edwkmsg').textContent = '';
   pane.classList.add('on');
+  if ($('#edwmsg')) $('#edwmsg').textContent = '';
   $('#edwk').focus();
 }
 function wCloseBlock() {
   WSEL = -1;
   if ($('#edwblk')) $('#edwblk').classList.remove('on');
+  if ($('#edwblkmsg')) $('#edwblkmsg').textContent = '';
+}
+
+// 2026-10-13（第 5 點）：台文詞塊的 POJ → 片假名／調號／鼻音／送氣。轉換一律走站上 `poj_converter.js`
+//   的 `pojToKana`（與音節框 `sylPreview` 同一支，不另寫轉換器）。回傳形狀 node 實測：
+//   `pojToKana('chhùn')`＝`['ツ·ヌ','3']`、`('thiaⁿ')`＝`['チ̄·ア','1n']`、`('chhun')`＝`['ツ·ヌ','']`。
+//   ⚠ 第 1 調：轉換器時而回 '1'、時而回 ''（無調號），資料裡兩種都有（tw_ruby 實數 '1' 774／'' 2252）
+//   ⇒ 換算出第 1 調時沿用該詞塊原本的寫法（原本 '1' 就留 '1'，否則落空），不擅自改體例。
+//   送氣＝假名裡有「·」（資料實數：有「·」者 2141 筆 asp=true、僅 1 筆例外）。
+const W_ASP_DOT = '·';
+function wPojFill(poj, oldTone) {
+  if (!poj || typeof pojToKana !== 'function') return null;
+  let got = null;
+  try { got = pojToKana(poj); } catch (e) { got = null; }
+  if (!Array.isArray(got) || !got[0]) return null;
+  const m = /^([1-8]?)(n?)$/.exec(String(got[1] || ''));
+  if (!m) return null;
+  let tone = m[1];
+  if (tone === '1' || tone === '') tone = (String(oldTone) === '1') ? '1' : '';
+  return { k: got[0], tone, nasal: m[2] === 'n', asp: got[0].indexOf(W_ASP_DOT) >= 0 };
+}
+function wPojPreview() {
+  if (WSEL < 0 || !WM) return;
+  const it = WM.items[WSEL];
+  if (!it || !('tone' in it.el)) return;
+  const poj = $('#edwpoj').value.trim();
+  if (!poj) { $('#edwprev').textContent = ''; return; }
+  const r = wPojFill(poj, it.el.tone);
+  if (!r) { $('#edwprev').textContent = '換不出來（請確認拼法）'; return; }
+  $('#edwk').value = r.k;
+  $('#edwtone').value = r.tone;
+  $('#edwnasal').checked = r.nasal;
+  $('#edwasp').checked = r.asp;
+  $('#edwk1').value = r.k;
+  $('#edwprev').textContent = `→ ${tokDisp(r)}（確認後按「套用」）`;
+}
+// 2026-10-14（操作者實測回報：附件四是把 POJ 直接打在「注音（片假名）」格，另開的 POJ 欄沒人看到）
+//   ⇒ 台文詞塊的注音格本身也收 POJ：打字時只預告，離開這格／按 Enter／按「套用」才換成片假名。
+//   打字中途不換＝「ch」打一半就被換成假名、後面接不下去。
+const W_LATIN = /[A-Za-z]/;
+function wKanaPoj(commit) {
+  if (WSEL < 0 || !WM) return true;
+  const it = WM.items[WSEL];
+  if (!it) return true;
+  const v = $('#edwk').value.trim();
+  if (!('tone' in it.el)) {
+    // 日文注音詞塊（2026-10-14 操作者裁：這裡也要能打 POJ 自動換）：日文注音的資料只有「字／注音」
+    //   兩欄、沒有調號／鼻音／送氣 ⇒ 只填片假名（送氣「·」在假名裡照留），調號不帶。
+    const say = $('#edwkmsg');
+    if (!W_LATIN.test(v)) { say.textContent = ''; return true; }
+    const r = wPojFill(v, '');
+    if (!r) { say.textContent = `「${v}」換不出片假名（請確認 POJ 拼法）`; return false; }
+    if (!commit) {
+      say.textContent = `POJ「${v}」→ ${r.k}（離開這格、按 Enter 或「套用」就換過去）`;
+      return true;
+    }
+    $('#edwk').value = r.k;
+    $('#edwk1').value = r.k;
+    say.textContent = `已把 POJ「${v}」換成 ${r.k}（日文注音沒有調號欄，只填片假名）`;
+    return true;
+  }
+  if (!W_LATIN.test(v)) {
+    if (!$('#edwpoj').value.trim()) $('#edwprev').textContent = '';
+    return true;
+  }
+  const r = wPojFill(v, it.el.tone);
+  if (!r) {
+    $('#edwprev').textContent = `「${v}」換不出片假名（請確認 POJ 拼法）`;
+    return false;
+  }
+  if (!commit) {
+    $('#edwprev').textContent = `POJ「${v}」→ ${tokDisp(r)}（離開這格、按 Enter 或「套用」就換過去）`;
+    return true;
+  }
+  $('#edwk').value = r.k;
+  $('#edwtone').value = r.tone;
+  $('#edwnasal').checked = r.nasal;
+  $('#edwasp').checked = r.asp;
+  $('#edwk1').value = r.k;
+  $('#edwprev').textContent = `已把 POJ「${v}」換成 ${tokDisp(r)}`;
+  return true;
+}
+
+// 2026-10-13（第 4 點）：整葉框的符號鈕。代替符在資料裡是一般的字「ー」（U+30FC，表頭幾個字就幾個），
+//   輕聲是一般字元「--」（例句台文 263 筆）——鍵盤本來就刪得掉，但夥伴打不出正確的「ー」（常打成「一」或「－」）。
+//   插入＝取代目前選取（沒選取＝插在游標處）；選取範圍裡有帶注音的詞塊＝連注音一起換掉（照樣跳「復原」）。
+const W_SYMS = ['ー', '--', '□', '〳〵', '、', '。', '・', '「', '」'];
+function wInsertSym(sym) {
+  const s = wSelection();
+  if (!s) { wHint('請先在上面的框裡點一下要插入的位置（或選取要換掉的字），再按符號。'); return; }
+  wSync();
+  const prev = { items: WM.items.slice(), lost: WM.lost.slice() };
+  wDelete(WM, s[0], s[1]);
+  wInsert(WM, s[0], sym);
+  wCloseBlock();
+  wRender();
+  wCheckGone(prev);
+  wHint('');
 }
 function wAfter(msg) { wHint(msg); if (!msg) { wCloseBlock(); wRender(); } }
 function wBind() {
@@ -1565,6 +1714,7 @@ function wBind() {
     wSync();
     wOpenBlock(WM.items.indexOf(WREG[+blk.getAttribute('data-wi')]));
   });
+  $('#edwadd').addEventListener('mousedown', ev => ev.preventDefault());   // 留住框裡的選取
   $('#edwadd').addEventListener('click', () => {
     const s = wSelection();
     if (!s) { wHint('請先在框裡選取要加注音的字。'); return; }
@@ -1588,6 +1738,10 @@ function wBind() {
   $('#edwok').addEventListener('click', () => {
     if (WSEL < 0) return;
     const it = WM.items[WSEL];
+    if (!wKanaPoj(true)) {
+      wHint('注音格裡的 POJ 換不出片假名，請改正拼法或直接打片假名。');
+      return;
+    }
     const p = { c: $('#edwc').value.trim(), k: $('#edwk').value.trim() };
     if (it && 'tone' in it.el) {
       p.tone = $('#edwtone').value;
@@ -1600,7 +1754,20 @@ function wBind() {
   $('#edwmerge').addEventListener('click', () => { if (WSEL >= 0) wAfter(wMerge(WM, WSEL)); });
   $('#edwsplit').addEventListener('click', () => {
     if (WSEL < 0) return;
-    wAfter(wSplit(WM, WSEL, parseInt($('#edwcut').value, 10), $('#edwk').value.trim(), $('#edwk2').value.trim()));
+    wAfter(wSplit(WM, WSEL, parseInt($('#edwcut').value, 10), $('#edwk1').value.trim(), $('#edwk2').value.trim()));
+  });
+  $('#edwpoj').addEventListener('input', wPojPreview);
+  $('#edwk').addEventListener('input', () => wKanaPoj(false));
+  $('#edwk').addEventListener('blur', () => wKanaPoj(true));
+  $('#edwk').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); wKanaPoj(true); } });
+  const syms = $('#edwsyms');
+  syms.innerHTML = W_SYMS.map(
+    c => `<button type="button" class="symbtn" data-sym="${esc(c)}">${esc(c)}</button>`).join('');
+  // mousedown 先擋掉＝按鈕不搶焦點，框裡的游標／選取才留得住（click 時 wSelection 還讀得到）
+  syms.addEventListener('mousedown', ev => { if (ev.target.closest('.symbtn')) ev.preventDefault(); });
+  syms.addEventListener('click', ev => {
+    const b = ev.target.closest('.symbtn');
+    if (b) wInsertSym(b.dataset.sym);
   });
 }
 
@@ -1688,6 +1855,16 @@ function showPane(mode) {
   }
 }
 
+// 2026-10-13（操作者交辦第 1 點）：「POJ＋日文中譯」區的 POJ 與中譯是本站加的、不是原書內容
+//   ⇒ 不問「數位化打錯／原書印面本身有誤」，類別歸「翻譯意見」（不進快車道、進翻譯場卡片）。
+//   排除兩種在這一區裡、但其實是原書內容的格：表頭條（`data-edit="head"`）與中譯未出時暫列的
+//   日文原文（`gloss_modern`，帶 `data-v2`）。只對描述模式生效——能產 op 的格一律是原書的葉。
+function isOursSlot(el, s) {
+  if (!el || !el.closest || !el.closest('[data-blockname="現代化對照"]')) return false;
+  if (el.closest('[data-v2]')) return false;
+  return (s.editPath || '') !== 'head';
+}
+
 function openEdit(el) {
   if (!TEAM.on) return;
   editTarget = el;
@@ -1704,6 +1881,8 @@ function openEdit(el) {
     pend = null;
   }
   if (pend) s.old = pend.op.new;
+  s.ours = (s.mode === 'desc') && isOursSlot(el, s);
+  $('#editbox').classList.toggle('zhslot', s.ours);
   $('#editctx').textContent = s.path
     ? `條目 ${entryId}／槽位 ${s.path}`
     : `條目 ${entryId}／欄位 ${s.editPath || '（整條）'}`;
@@ -1772,6 +1951,7 @@ function sylPreview() {
           // 顯示層第 1 調不標（`display_tn`）⇒ 反推時 '1' 與 '' 都落成空
           $('#edtone').value = (m[1] === '1') ? '' : m[1];
           $('#ednasal').checked = (m[2] === 'n');
+          $('#edasp').checked = got[0].indexOf(W_ASP_DOT) >= 0;   // 2026-10-14：送氣跟著假名裡的「·」
         }
       }
     } catch (e) { /* 換不出來就讓使用者自己打假名 */ }
@@ -1787,6 +1967,15 @@ function sylPreview() {
   }
   $('#edprev').textContent = `站上會顯示：${tokDisp(tok)}`
     + (back ? `（POJ ${back}）` : '（POJ 換不出來——假名或調號可能不合法）');
+}
+
+// 2026-10-14：音節框（表頭假名）的「假名」格也收 POJ——同整葉框注音格（`wKanaPoj`）的體例：
+//   離開這格／按 Enter／送出時，假名格裡有羅馬字就搬進 POJ 欄、走 `sylPreview` 換算（不另寫轉換）。
+function sylKanaPoj() {
+  const v = $('#edkana').value.trim();
+  if (!W_LATIN.test(v)) return;
+  $('#edpoj').value = v;
+  sylPreview();
 }
 
 // 表單 → 新 token。⚠ **鍵組必須與現值完全相同**（`validate_op`：不得增刪欄，note／ed 原樣保留）
@@ -1822,6 +2011,8 @@ function buildOp() {
   if (!arr || !kind) return null;
   if (s.mode === 'syl') {
     if (kind !== 'token') return null;
+    sylKanaPoj();
+    if (W_LATIN.test($('#edkana').value)) return { err: '假名格裡的 POJ 換不出片假名，請改正拼法或直接打片假名。' };
     const nw = sylToken();
     if (!nw.k) return { err: '假名不得為空。' };
     if (sameToken(nw, s.old)) return { err: '沒有改到東西。' };
@@ -1853,8 +2044,8 @@ async function submitEdit() {
   if (!editSlot || !TEAM.on) return;
   const s = editSlot;
   const fixEl = $('#editfix').querySelector('input[name=edfix]:checked');
-  if (!fixEl) { $('#edithint').textContent = '請先選「數位化打錯」或「原書印面本身有誤」。'; return; }
-  const fixkind = fixEl.value;
+  if (!fixEl && !s.ours) { $('#edithint').textContent = '請先選「數位化打錯」或「原書印面本身有誤」。'; return; }
+  const fixkind = s.ours ? '' : fixEl.value;
 
   let op = null;
   let after = '';
@@ -1884,7 +2075,7 @@ async function submitEdit() {
       : (s.old == null ? '' : String(s.old)),
     after,
     note,
-    cat: '原冊改錯字',
+    cat: s.ours ? '翻譯意見' : '原冊改錯字',
     fixkind,
     token: TEAM.token,
   };
@@ -1904,6 +2095,8 @@ async function submitEdit() {
       // 送出即見（定案 §二 14）：不必等下一次整點，也不必重新整理
       paintPatch({ fid: j.fid, op, status: 'queued', reporter: j.reporter }, true);
     }
+    // 中譯／POJ 欄（第 1 點）＝翻譯意見，不走快車道 ⇒ 不能講「下一次整點發布」
+    if (s.ours) { alert('已送出（翻譯意見）：由站主判讀後處理，不會自動改到網站上。'); return; }
     alert(SENT_HINT);
     // C326：同一格可能已有排隊中的修正 ⇒ 重新整理，讓疊加層以淨結果重畫（一格一個標記）
     if (op) location.reload();
@@ -2216,6 +2409,15 @@ async function init() {
     }
     const pb = ev.target.closest('.proofbtn');
     if (pb) { openEdit(pb); return; }
+    // 2026-10-13（第 6 點）：批注卡的「加注」「修改」鈕（團隊模式才畫得出來）
+    const ab = TEAM.on && ev.target.closest('.anbtn');
+    if (ab) {
+      ev.preventDefault();                       // 「加注」在 <summary> 裡：不要順便收合批注卡
+      if (ab.classList.contains('anadd')) { openReport('批注', e.id, { cat: ANNOT_CAT }); return; }
+      const a = (e.annots || []).find(x => x.nid === ab.dataset.nid);
+      if (a) openReport('批注', e.id, { cat: ANNOT_CAT, edit: a });
+      return;
+    }
     const rb = ev.target.closest('.reportbtn');
     if (rb) openReport(rb.dataset.block, e.id);
   });
@@ -2293,6 +2495,10 @@ async function init() {
   for (const eid of ['edpoj', 'edkana', 'edtone', 'ednasal', 'edasp']) {
     const el = $('#' + eid);
     if (el) el.addEventListener('input', sylPreview);
+  }
+  if ($('#edkana')) {
+    $('#edkana').addEventListener('blur', sylKanaPoj);
+    $('#edkana').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); sylKanaPoj(); } });
   }
 }
 document.addEventListener('DOMContentLoaded', init);

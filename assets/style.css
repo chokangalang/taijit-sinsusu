@@ -465,6 +465,29 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .edwblk.on { display: block; }
 #editbox .edwblk input[type=text] { max-width: 9em; }
 #editbox .edwblk input[type=number] { width: 3.5em; padding: 4px; font-size: 15px; }
+/* 2026-10-13：整葉框操作說明置頂、符號鈕、就地提示；中譯欄免選錯誤種類；批注卡的加注／修改鈕。 */
+.edhelp { margin: 4px 0 6px; padding: 6px 10px; font-size: 14px; line-height: 1.65;
+  border: 1px solid var(--line); border-radius: 4px; background: #fffdf6; }
+.edhelp summary { cursor: pointer; font-weight: 700; color: var(--sub); }
+.edhelp ol { margin: 6px 0 0; padding-left: 1.4em; }
+.edhelp li { margin: 2px 0; }
+.edwsyms { margin-top: 6px; }
+#edwmsg:empty, #edwblkmsg:empty, #edwkmsg:empty { display: none; }
+#edwkmsg { margin: 4px 0 0; }
+#edwmsg, #edwblkmsg { margin: 6px 0 0; font-weight: 700; }
+#edwsplitno { display: none; margin: 6px 0 0; }
+.edwblk.single #edwsplitrow { display: none; }
+.edwblk.single #edwsplitno { display: block; }
+#edwprev { font-size: 14px; }
+#editzhnote { display: none; margin-top: 12px; }
+#editbox.zhslot #editzhnote { display: block; }
+#editbox.zhslot #editfix { display: none; }
+.anbtn {
+  font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; text-indent: 0;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--sub);
+  vertical-align: .12em; font-family: inherit;
+}
+.anbtn:hover { color: var(--accent); border-color: var(--accent); }
 
 /* 疊加層標記（定案 §二 14：queued＝校對中、applied＝待上站；對所有人可見）。
    ⚠ 標記要看得出來「這不是定稿」，但不能搶走本文——用小字底色，不用紅字。 */
