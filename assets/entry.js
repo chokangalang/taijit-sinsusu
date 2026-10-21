@@ -556,10 +556,14 @@ function blockOriginal(e) {
 // 署名＝**卡標題本身**，每則不標個人（§二 7）⇒ 資料層的 `by` 不上畫面；每則只標最後核定日（§二 8）。
 // 2026-10-13（操作者交辦第 6／7 點，已與站主談定）：團隊模式在批注卡上多「加注」「修改」兩種鈕，
 //   送出後走快車道（每小時工作直接寫進 annotations/ 上站），站主事後在快車道後審表追認或撤回。
-//   一般讀者畫面零變化（無批注仍不渲染、不出鈕）；團隊模式無批注時出一張空卡，只為了放「加注」鈕。
+//   一般讀者畫面零變化（無批注仍不渲染、不出鈕）。
+// C392（M062-1，站主改口）：團隊模式無批注時也不出卡（原本出一張空卡只為了放「加注」鈕，把本文往下擠），
+//   「加注」鈕改放在「POJ＋日文中譯」卡的標題列（`blockModern` 呼 `annotAddBtn`）；鈕的 class／事件不變。
+const annotAddBtn = () =>
+  `<button type="button" class="anbtn anadd" title="先選取本文的文字（批注要掛在哪裡），再按這裡">加注</button>`;
 function blockAnnots(e) {
   const an = e.annots || [];
-  if (!an.length && !TEAM.on) return '';          // §二 6：無批注不渲染（團隊模式例外：要放加注鈕）
+  if (!an.length) return '';          // §二 6：無批注不渲染（團隊模式的加注鈕在 blockModern 標題列）
   const items = an.map((a, i) => {
     const n = i + 1;
     // 編號回跳（§四 場 1 工項 3）：列號連回本文記號，記號連回本列
@@ -572,13 +576,11 @@ function blockAnnots(e) {
            `<span class="ankind">${esc(a.kind)}</span>` +
            `<span class="antext">${esc(a.text)}</span>${dt}${ed}</li>`;
   }).join('');
-  const add = TEAM.on
-    ? `<button type="button" class="anbtn anadd" title="先選取本文的文字（批注要掛在哪裡），再按這裡">加注</button>` : '';
-  const empty = an.length ? '' : '<p class="src">本條目尚無批注。要加注：先選取本文的文字，再按「加注」。</p>';
+  const add = TEAM.on ? annotAddBtn() : '';
   return `<section class="card annots" data-blockname="批注">
     <details open>
       <summary>做工á人批注<span class="ancnt">${an.length}</span>${add}</summary>
-      ${empty}<ul class="anlist">${items}</ul>
+      <ul class="anlist">${items}</ul>
     </details>
   </section>`;
 }
@@ -666,9 +668,11 @@ function blockModern(e) {
   const senses = (e.senses || []).map((s, i) => senseHTML(s, i, total, true, e.zh_status, e)).join('');
   // 2026-07-17 站主裁示：區塊名「現代化對照」5 字自標題拿掉，只留「POJ＋日文中譯」
   //（data-block／data-blockname 內部值不動，修訂紀錄用語連續）
+  // C392（M062-1）：團隊模式＋零批注時，「加注」鈕放在本卡標題列（批注卡不出）；其餘情形這裡是空字串
+  const add = TEAM.on && !(e.annots || []).length ? annotAddBtn() : '';
   return `<section class="card" data-blockname="現代化對照">
     ${headStrip(e, false)}
-    <h2>POJ＋日文中譯<button class="reportbtn" data-block="現代化對照">回報錯誤</button></h2>
+    <h2>POJ＋日文中譯${add}<button class="reportbtn" data-block="現代化對照">回報錯誤</button></h2>
     ${senses}${refsHTML(e, true)}
   </section>`;
 }
@@ -1683,7 +1687,7 @@ function wKanaPoj(commit) {
 // 2026-10-13（第 4 點）：整葉框的符號鈕。代替符在資料裡是一般的字「ー」（U+30FC，表頭幾個字就幾個），
 //   輕聲是一般字元「--」（例句台文 263 筆）——鍵盤本來就刪得掉，但夥伴打不出正確的「ー」（常打成「一」或「－」）。
 //   插入＝取代目前選取（沒選取＝插在游標處）；選取範圍裡有帶注音的詞塊＝連注音一起換掉（照樣跳「復原」）。
-const W_SYMS = ['ー', '--', '□', '〳〵', '、', '。', '・', '「', '」'];
+const W_SYMS = ['ー', '--', '□', '〳〵', '〴〵', '、', '。', '・', '「', '」'];
 function wInsertSym(sym) {
   const s = wSelection();
   if (!s) { wHint('請先在上面的框裡點一下要插入的位置（或選取要換掉的字），再按符號。'); return; }
@@ -1867,7 +1871,7 @@ function describeSlot(el) {
 }
 
 // ── 對話框 ─────────────────────────────────────────────────────────────────
-const SYMS = ['□', 'ーー', '〳〵', '、', '。', '・', '「', '」'];
+const SYMS = ['□', 'ーー', '〳〵', '〴〵', '、', '。', '・', '「', '」'];
 
 function showPane(mode) {
   for (const id of ['editsyl', 'editleaf', 'editsep', 'editdesc', 'editwhole']) {
