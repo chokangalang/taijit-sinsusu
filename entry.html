@@ -109,6 +109,8 @@
             要<b>改字或改注音</b>：<b>雙擊那一塊</b>，下方會出現小編輯器。</li>
           <li><b>小編輯器</b>：改「字」或「注音」後按「套用」。台文詞塊的「注音」格可以<b>直接打 POJ 羅馬字</b>（例：chhun3），
             離開這格、按 Enter 或按「套用」就自動換成片假名、調號、鼻音、送氣（下方「POJ」格也可以打）。</li>
+          <li><b>日文注音／台文音節</b>：日釋或日文例句裡的台文詞被標成日文注音時，雙擊該塊 → 按「台文音節」，
+            調號、鼻音、送氣欄與 POJ 格就會出現；按「日文注音」改回去。改了類的詞塊畫紫色虛線，送出前請確認。</li>
           <li><b>合併</b>：雙擊前一塊 →「與後一塊合併」（只合併兩個緊鄰的帶注音詞塊；台文一字一音節不合併）。</li>
           <li><b>拆開</b>：只對<b>兩個字以上</b>的詞塊有用（例：動作／ドウサ → 動／ドウ＋作／サ）。
             雙擊該塊 → 填「第幾個字之後拆」→ 分別填<b>前半注音</b>與<b>後半注音</b>（兩格都要有）→ 按「拆開」。
@@ -132,6 +134,13 @@
       <div id="edwgone" class="edwgone"></div>
       <div id="edwlost" class="edwlost"></div>
       <div id="edwblk" class="edwblk">
+        <!-- C394（M062 子單 3）：日釋／日文例句的詞塊可改類；台文例句不顯示這一列。 -->
+        <div class="edrow" id="edwlangrow">
+          <span class="src">這一塊是：</span>
+          <button type="button" class="edwlang" id="edwlangjp" data-lang="jp">日文注音</button>
+          <button type="button" class="edwlang" id="edwlangtw" data-lang="tw">台文音節</button>
+          <span class="src" id="edwlangnote"></span>
+        </div>
         <div class="edrow">
           <label class="src">字 <input id="edwc" type="text" maxlength="12" autocomplete="off" spellcheck="false"></label>
           <label class="src"><span id="edwklab">注音（片假名）</span> <input id="edwk" type="text" maxlength="16" autocomplete="off" spellcheck="false"></label>

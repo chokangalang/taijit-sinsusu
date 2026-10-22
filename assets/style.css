@@ -451,6 +451,9 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .wblk rt { font-size: 11px; color: var(--accent); }
 .wblk.fresh { background: #e6f3e6; border-bottom-color: #8fbf8f; }
 .wblk.pend { background: #fde8cc; border-bottom-color: #e0a050; }
+/* C394：改了類（日文注音↔台文音節）的詞塊＝紫色虛線底；切換鈕目前那一邊實心 */
+.wblk.flip { border-bottom: 2px dashed #8e5bb5; }
+#editbox .edwlang.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .edwlost { margin-top: 6px; font-size: 14px; }
 .edwgone { display: none; margin-top: 6px; padding: 6px 8px; font-size: 14px; line-height: 1.6;
   background: #fdecea; border: 1px solid #e3b4ad; border-radius: 4px; color: #7a2e24; }

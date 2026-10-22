@@ -1413,8 +1413,10 @@ let WSEL = -1;          // 正在小編輯器裡改的詞塊（items 索引）
 function wBlockHTML(it, wi) {
   const tn = tnOf(it.el);
   const rt = esc(it.el.k || '') + (tn ? `<sup class="tn">${esc(tn)}</sup>` : '');
-  return `<span class="wblk${it.pend ? ' pend' : ''}${it.fresh ? ' fresh' : ''}" contenteditable="false" data-wi="${wi}"`
-    + ` title="${it.pend ? '改了字、注音還是舊的（待確認）；雙擊可改' : '雙擊改字或注音'}">`
+  const tip = it.pend ? '改了字、注音還是舊的（待確認）；雙擊可改'
+    : (it.flip ? `剛改成${'tone' in it.el ? '台文音節' : '日文注音'}（待確認）；雙擊可改` : '雙擊改字或注音');
+  return `<span class="wblk${it.pend ? ' pend' : ''}${it.fresh ? ' fresh' : ''}${it.flip ? ' flip' : ''}"`
+    + ` contenteditable="false" data-wi="${wi}" title="${tip}">`
     + `<ruby>${esc(it.el.c)}<rt>${rt}</rt></ruby></span>`;
 }
 function wRender() {
@@ -1444,8 +1446,10 @@ function wRender() {
       : '';
   }
   const pend = WM.items.filter(x => x.b && x.pend).length;
+  const flip = WM.items.filter(x => x.b && x.flip).length;
   if ($('#edwstat')) {
-    $('#edwstat').textContent = pend ? `有 ${pend} 個詞塊改了字、注音還是舊的（橘色）：送出前請確認讀音，不改也可以送。` : '';
+    $('#edwstat').textContent = (pend ? `有 ${pend} 個詞塊改了字、注音還是舊的（橘色）：送出前請確認讀音，不改也可以送。` : '')
+      + (flip ? `有 ${flip} 個詞塊改了類（日文注音↔台文音節，紫色虛線）：送出前請確認。` : '');
   }
 }
 
@@ -1563,6 +1567,35 @@ function wCheckGone(prev) {
 function wNewEl(path) {                       // 新加的注音：台文例句＝音節形，其餘＝日文形
   return /\.tw$/.test(path) ? { c: '', k: '', tone: '', nasal: false, asp: false } : { c: '', k: '' };
 }
+// C394（M062 子單 3）：日釋／日文例句裡的詞塊在「日文注音」與「台文音節」之間改類。判日台的唯一依據是
+//   元素有沒有 `tone` 鍵（wOpenBlock／wholeUnitsView／export 的 ruby_view 皆同）⇒ 改類＝加上或拿掉
+//   `tone`／`nasal`／`asp` 三鍵；`wSetBlock` 只改既有鍵（新鍵進不去），所以另寫這支。
+//   切到台文：同一塊先前切過日文＝照當時拿掉的鍵、值、順序還原（往返不漂移：現庫有 {c,k,tone}、
+//     {c,k,tone,nasal}、tone／asp／nasal 順序者，不能一律補三鍵）；否則補 `tone:''`（第 1 調的既有寫法之一；
+//     站主 LINE 澄清不擋空 tone）、`nasal:false`、`asp`＝假名裡有「·」（同 wPojFill 的送氣規則）。
+//   切到日文：拿掉三鍵、留一份在 `twKeys` 供切回。
+//   不改類：台文例句（`tw_ruby` 不收日文形）；帶校訂層 `ed`／`orig`／`note` 的塊（兩向都不得碰，改走文字說明）。
+const W_TW_KEYS = ['tone', 'nasal', 'asp'];
+function wSetLang(m, idx, lang, path) {
+  const it = m.items[idx];
+  if (!it || !it.b) return '那裡不是詞塊。';
+  if (lang !== 'tw' && lang !== 'jp') return '改類只有「日文注音」與「台文音節」兩種。';
+  if (/\.tw$/.test(String(path || ''))) return '台文例句的詞塊一律是台文音節，不能改成日文注音。';
+  if (W_NOTE_KEYS.some(k => k in it.el)) return '帶校訂紀錄的詞塊不能在這裡改類（請改用文字說明）。';
+  const isTw = 'tone' in it.el;
+  if (it.tw0 == null) it.tw0 = isTw;
+  if (lang === 'tw' && !isTw) {
+    const saved = it.twKeys || { tone: '', nasal: false, asp: String(it.el.k || '').indexOf(W_ASP_DOT) >= 0 };
+    for (const k of Object.keys(saved)) it.el[k] = saved[k];
+  } else if (lang === 'jp' && isTw) {
+    it.twKeys = {};
+    for (const k of Object.keys(it.el)) {
+      if (W_TW_KEYS.indexOf(k) >= 0) { it.twKeys[k] = it.el[k]; delete it.el[k]; }
+    }
+  }
+  it.flip = ('tone' in it.el) !== it.tw0;
+  return '';
+}
 function wOpenBlock(idx) {
   const it = WM && WM.items[idx];
   const pane = $('#edwblk');
@@ -1571,6 +1604,15 @@ function wOpenBlock(idx) {
   $('#edwc').value = it.el.c;
   $('#edwk').value = String(it.el.k || '');
   const tw = 'tone' in it.el;
+  // C394：日文注音／台文音節切換——台文例句不給；帶校訂層的塊鎖灰（見 wSetLang）
+  const locked = W_NOTE_KEYS.some(k => k in it.el);
+  $('#edwlangrow').style.display = /\.tw$/.test(String((editSlot && editSlot.path) || '')) ? 'none' : '';
+  for (const b of [$('#edwlangjp'), $('#edwlangtw')]) {
+    b.disabled = locked;
+    b.classList.toggle('on', (b.dataset.lang === 'tw') === tw);
+  }
+  $('#edwlangnote').textContent = locked ? '帶校訂紀錄（ed／orig／note）的詞塊不能在這裡改類，請改用文字說明。'
+    : (it.flip ? '這一塊剛改了類（紫色虛線），送出前請確認。' : '');
   $('#edwtw').style.display = tw ? '' : 'none';
   if (tw) {
     $('#edwtone').value = String(it.el.tone == null ? '' : it.el.tone);
@@ -1774,6 +1816,21 @@ function wBind() {
       if ('asp' in it.el) p.asp = $('#edwasp').checked;
     }
     wAfter(wSetBlock(WM, WSEL, p));
+  });
+  // C394：改類。已打在「字」「注音」格、還沒按「套用」的值照留（改類只動鍵組，不吃掉人正在打的字）
+  $('#edwlangrow').addEventListener('click', ev => {
+    const b = ev.target.closest('.edwlang');
+    if (!b || b.disabled || WSEL < 0) return;
+    const keep = { c: $('#edwc').value, k: $('#edwk').value };
+    const msg = wSetLang(WM, WSEL, b.dataset.lang, editSlot && editSlot.path);
+    if (msg) { wHint(msg); return; }
+    const idx = WSEL;
+    wRender();
+    wOpenBlock(idx);
+    $('#edwc').value = keep.c;
+    $('#edwk').value = keep.k;
+    $('#edwk1').value = keep.k;
+    wKanaPoj(false);
   });
   $('#edwdel').addEventListener('click', () => { if (WSEL >= 0) { wDelete(WM, WSEL, WSEL + 1); wAfter(''); } });
   $('#edwmerge').addEventListener('click', () => { if (WSEL >= 0) wAfter(wMerge(WM, WSEL)); });
