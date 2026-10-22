@@ -114,6 +114,34 @@ function isIdsUnit(s) {
   return c >= 0x2FF0 && c <= 0x2FFF;
 }
 
+// 缺字底字（J50 D5）：□／IDS 合字→POJ 音節；rubyModern／twModernHTML／zhHTML 共用＝三處同一底字（M062-2）
+function pjBase(u, poj) {
+  return (u === '□' || isIdsUnit(u)) ? `<span class="pjsub">${esc(poj)}</span>` : esc(u);
+}
+
+// IDS 感知字位切分——照 `validate_v2._kunit`（單一真相；export `ksplit` 亦取它）移植：
+//   ⿲⿳ 吃 3 個部件、其餘 ⿰–⿻ 吃 2 個，部件可巢狀。M062-2：中譯標記 `t` 是整個詞（之□、門⿵門丨），
+//   要逐字位對 POJ 音節。test_zh_tw_sync 對全站中譯標記比對本支與 Python klen 的字位數。
+function kunits(s) {
+  s = String(s || '');
+  const cps = Array.from(s);
+  const eat = i => {
+    if (i >= cps.length) return i;
+    const c = cps[i].codePointAt(0);
+    if (c === 0x2FF2 || c === 0x2FF3) { i += 1; for (let k = 0; k < 3; k++) i = eat(i); return i; }
+    if (c >= 0x2FF0 && c <= 0x2FFB) { i += 1; for (let k = 0; k < 2; k++) i = eat(i); return i; }
+    return i + 1;
+  };
+  const out = [];
+  let i = 0;
+  while (i < cps.length) {
+    const j = eat(i);
+    out.push(cps.slice(i, j).join(''));
+    i = j;
+  }
+  return out;
+}
+
 // 全 □（殘字）表頭：主位改顯 POJ（2026-07-12 夥伴回饋；與 app.js 同規）
 function isBlankKanji(s) {
   s = String(s || '');
@@ -180,7 +208,7 @@ function rubyModern(unit, ri) {
   else if (r.uncertain) attr = ` title="原書調記留空，調待考"`;
   const cls = 'poj' + (r.uncertain ? ' unc' : '') + (r.star ? ' ed' : '');
   // 缺字底字：□／IDS 合字→POJ 音節（ruby 照印保留；原冊視圖 rubyOrig 不動；J50 D5）
-  const base = (unit.u === '□' || isIdsUnit(unit.u)) ? `<span class="pjsub">${esc(r.poj)}</span>` : esc(unit.u);
+  const base = pjBase(unit.u, r.poj);
   return annBox(cls, attr, base, rt, riAttr(ri));
 }
 
@@ -218,13 +246,24 @@ function unitsHTML(units, modern) {
   return parts.join('');
 }
 
+// M062-2：中譯標記 `{台文|POJ}` 的底字。標記是整個詞＝逐字位走 pjBase（與日釋現代化區同一底字）；
+//   □／IDS 字位取對應 POJ 音節（之□ chi-bai → 之 bai）。字位數與音節數對不上時整段改 POJ，
+//   寧可少一個漢字也不出破字。不含 □／IDS 的標記原樣輸出（與改前逐字相同）。
+function zhMarkBase(t, poj) {
+  const parts = kunits(t);
+  if (!parts.some(p => p === '□' || isIdsUnit(p))) return esc(t);
+  const syls = String(poj || '').split(/[-\s]+/).filter(Boolean);
+  if (syls.length !== parts.length) return `<span class="pjsub">${esc(poj)}</span>`;
+  return parts.map((p, i) => pjBase(p, syls[i])).join('');
+}
+
 function zhHTML(zh, units) {
   // 中譯內台文引用：zh_units 有 poj 的段落渲染 POJ ruby（export parse_zh 產）
   // 帶 ref＝可解析的參照詞 → 超連結（2026-07-12 夥伴回饋）
   if (!units) return esc(zh);
   return units.map(u => {
     if (u.poj == null) return esc(u.t);
-    let h = annBox('poj', '', esc(u.t), esc(u.poj));
+    let h = annBox('poj', '', zhMarkBase(u.t, u.poj), esc(u.poj));
     if (u.ref) h = `<a class="reflink" href="entry.html?id=${encodeURIComponent(u.ref)}" title="前往參照條目">${h}</a>`;
     return h;
   }).join('');
@@ -238,7 +277,7 @@ function twModernHTML(items) {
     if (it.star) attr = ' title="採校訂值（見原冊區＊註）"';
     if (it.uncertain && !attr) attr = ' title="原書調記留空，調待考"';
     // 缺字底字：□／IDS 合字→POJ 音節（ruby 照印保留；2026-07-12 夥伴回饋＋J50 D5）
-    const base = (it.u === '□' || isIdsUnit(it.u)) ? `<span class="pjsub">${esc(it.poj)}</span>` : esc(it.u);
+    const base = pjBase(it.u, it.poj);
     return annBox(cls, attr, base, esc(it.poj) + (it.star ? '*' : ''));
   }).join('');
 }
