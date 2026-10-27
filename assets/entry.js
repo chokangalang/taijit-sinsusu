@@ -1274,6 +1274,8 @@ function wholeRubySrc(arr) {
 // 整葉現值 {t, r, a}。站面文件序第 n 個帶 r 的單位＝r[n]（attach_ruby 單一指標依序消耗；
 //   掛不上的只會落在尾段）。站面與 opsrc 對不上（不同版產物）回 null＝不給整葉框。
 function wholeOldOf(arr) {
+  const refOld = refSlotOldOf(arr);
+  if (refOld) return refOld;
   const units = wholeUnits(arr);
   const r = wholeRubySrc(arr);
   if (!units || !units.length || r == null) return null;
@@ -1290,6 +1292,47 @@ function wholeOldOf(arr) {
   }
   while (a.length < r.length) a.push(null);
   return { t: textOfUnits(units), r: clone(r), a };
+}
+
+// C406（M062 子單 5）：參照槽義的整葉現值。站面該義 `gloss` 是空的（export「槽文字不出 gloss
+//   （由 refs 承載）」），`refs[ri].kanji` 又只有目標詞 ⇒ 整片原字串（含「＝〔」「〕」與註）與起點
+//   由 opsrc 的 `gt` 帶（export `op_source`／`ref_slot_starts`，起點口徑＝驗證器 `ruby_starts`）。
+//   站面 gloss 有字＝一般釋義，照上面那條路走；`gt` 與 `gr` 條數對不上（不同版產物）回 null。
+function refSlotOldOf(arr) {
+  if (!arr || arr.length !== 4 || arr[0] !== 'senses' || arr[2] !== 'gloss' || arr[3] !== 'jp') return null;
+  const sn = ((ENTRY && ENTRY.senses) || [])[arr[1]];
+  if (!sn || (sn.gloss || []).length) return null;
+  const gt = (OPSRC && OPSRC.gt) ? OPSRC.gt[String(arr[1])] : null;
+  if (!gt || typeof gt.t !== 'string' || !Array.isArray(gt.a)) return null;
+  const r = (OPSRC.gr || {})[String(arr[1])] || [];
+  if (gt.a.length !== r.length) return null;
+  return { t: gt.t, r: clone(r), a: clone(gt.a) };
+}
+
+// ── 版面詞彙 → 資料路徑（編輯器方向）────────────────────────────────────────
+// `data-edit` 是**版面**的詞彙、op 的 path 是**資料**的（同 `AN_DOM_PATH` 那張的道理，方向相反：
+//   那張是批注 path → DOM 落點，這張是雙擊的 DOM → op path）。一列一型；對不到回空字串＝照舊路徑。
+//   ・`refs[ri]`（參照槽外框）→ `senses[sense_i].gloss.jp`：site 的 `refs[]` 是 export 從該義
+//     `gloss` 衍生的視圖、v2 沒有 `refs` 這個鍵 ⇒ 回到它本來的那一片葉，不在白名單另造「參照」型
+//     （M062-5 §一之二）。無 `sense_i` 的舊資料（正常為零）不對映。
+// ⚠ 新增列時想清楚：這張只影響「雙擊開哪一種框」，不改渲染（讀者畫面零變化）。
+const EDIT_TO_V2 = [
+  [/^refs\[(\d+)\]$/, m => {
+    const r = ((ENTRY && ENTRY.refs) || [])[parseInt(m[1], 10)];
+    return (r && Number.isInteger(r.sense_i)) ? `senses[${r.sense_i}].gloss.jp` : '';
+  }],
+];
+function layoutToV2(editPath) {
+  for (const [re, fn] of EDIT_TO_V2) {
+    const m = re.exec(String(editPath || ''));
+    if (m) return fn(m);
+  }
+  return '';
+}
+// 反查：第 si 義的參照槽是哪幾個 `refs[ri]`（疊加層要把整葉新值畫回參照槽那一行）
+function refIdxOfSense(si) {
+  return ((ENTRY && ENTRY.refs) || []).map((r, ri) => (r && r.sense_i === si ? ri : -1))
+    .filter(ri => ri >= 0);
 }
 
 // ── 編輯模型（純函式；DOM 層只負責畫與讀回）──
@@ -1598,6 +1641,23 @@ function wGoneNote(gone) {
     + '注音也一起刪了。若是要<b>改字</b>而不是刪詞：按「復原」，再雙擊該詞塊、在「字」欄改。'
     + '<button type="button" id="edwundo">復原</button>';
   el.classList.add('on');
+}
+// C406（M062 子單 5 §三 邊界 3）：參照槽開整葉框時的提示。元素只在開框時才建（`entry.html` 不加），
+//   讀者模式的頁面 DOM 因此一個字都不變；其他葉開框時藏起來。
+const W_REF_NOTE = '這是參照槽：框裡是這一義的整片原文。〔〕外的字是參照註（dissect_ref_slot 以字串形判槽）'
+  + '——改目標詞請改〔〕裡的字；拿掉「＝〔」或「〕」會讓這一義不再被當成參照。';
+function wRefNote(on) {
+  let el = $('#edwref');
+  const box = $('#edwtext');
+  if (!el && on && box && box.parentNode && document.createElement) {
+    el = document.createElement('p');
+    el.id = 'edwref';
+    el.className = 'src warn';
+    box.parentNode.insertBefore(el, box);
+  }
+  if (!el) return;
+  el.textContent = on ? W_REF_NOTE : '';
+  el.style.display = on ? '' : 'none';
 }
 function wCheckGone(prev) {
   const gone = wGoneBlocks(prev.items, WM.items);
@@ -1930,6 +1990,15 @@ function describeSlot(el) {
     }
   }
 
+  // C406（M062 子單 5）：參照槽〔…〕＝版面 `refs[ri]`、資料是 `senses[sense_i].gloss.jp` 那一片葉
+  //   ⇒ 經 `EDIT_TO_V2` 回到資料路徑、開同一個整葉框（不新增白名單形狀）。opsrc 沒帶整片＝說清楚為什麼。
+  const refWp = layoutToV2(editPath);
+  if (refWp) {
+    const old = wholeOldOf(pathToArr(refWp));
+    if (old && old.t) return { mode: 'whole', path: refWp, old, editPath, host, why: '', refSlot: true };
+    return Object.assign(base, { why: '參照槽的整片原值沒載到（本頁 opsrc 尚未帶參照槽原文，重新發布後即可）' });
+  }
+
   const rb = el.closest('.rb[data-ri]');
   const rbHost = el.closest('[data-rb]');
   if (rb && rbHost) {
@@ -2031,6 +2100,7 @@ function openEdit(el) {
     wGoneNote(null);
     wCloseBlock();
     wRender();
+    wRefNote(!!s.refSlot);
   } else if (s.mode === 'sep') {
     const opts = [['', '無（一般連寫）'], ['--', '-- 輕聲'], ['|', '| 詞界']];
     $('#edsepbtns').innerHTML = opts.map(([v, lab]) =>
@@ -2292,6 +2362,20 @@ function pathEls(arr) {
       .map(h => h.querySelector(`.rb[data-ri="${last}"]`)).filter(Boolean);
   }
   const lp = arr.join('.').replace(/\.(\d+)/g, '[$1]');   // 文字葉
+  // C406（M062 子單 5）：參照槽義的釋義葉在站面是空的 gloss（字畫在參照槽那一行）
+  //   ⇒ 疊加層畫在參照槽整行（`.refin`：槽前註＋〔…〕＋圈碼＋槽後註全出自這一片葉），不畫在空 gloss 上。
+  const sn = (arr.length === 4 && arr[0] === 'senses' && arr[2] === 'gloss' && arr[3] === 'jp')
+    ? ((ENTRY && ENTRY.senses) || [])[arr[1]] : null;
+  if (sn && !(sn.gloss || []).length) {
+    const hosts = [];
+    for (const ri of refIdxOfSense(arr[1])) {
+      for (const h of root.querySelectorAll(`[data-edit="refs[${ri}]"]`)) {
+        const line = h.closest('.refin');
+        if (line) hosts.push(line);
+      }
+    }
+    if (hosts.length) return hosts;
+  }
   return Array.from(root.querySelectorAll(`[data-v2="${lp}"]`));
 }
 
@@ -2311,7 +2395,8 @@ function paintPatch(p, live) {
       // C338：整葉 op 帶著起點 ⇒ 原冊區照 op 自帶的位置畫注音（不在瀏覽器重跑 attach_ruby）；
       //   現代化區（`gloss_modern`，畫的是 POJ）只換純文字、注音等整點發布後由 export 重畫。
       const ed = el.getAttribute('data-edit') || '';
-      if (/\.gloss_modern$/.test(ed)) el.textContent = String(p.op.new.t);
+      const modernRef = el.classList.contains('refin') && !!el.closest('[data-blockname="現代化對照"]');
+      if (/\.gloss_modern$/.test(ed) || modernRef) el.textContent = String(p.op.new.t);
       else el.innerHTML = unitsHTML(wholeUnitsView(p.op.new), false);
     } else if (arr[0] === 'head' && arr[1] === 'kana') {
       const em = el.querySelector('sup.em');
