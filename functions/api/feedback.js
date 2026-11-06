@@ -71,9 +71,13 @@ export function bearer(request) {
   return m ? m[1].trim() : '';
 }
 
-// 定案 §三 的 status 值域。PATCH 只收這五個，其餘 400（未知值寫進去會讓疊加層與
+// 定案 §三 的 status 值域。PATCH 只收這六個，其餘 400（未知值寫進去會讓疊加層與
 // 後審表兩邊都判不出狀態，寧可當場拒收）。
-export const STATUS_VALUES = ['queued', 'applied', 'rejected', 'published', 'reverted'];
+// 第六值 `superseded`＝「已由別件處理」（非 queued、非採用、非拒）：站主 M065 §三.2 裁，
+//   出處 M063_X5 §五 Q5 三條件之㈡「status 標結案碼不標『採用』」；由站主機每小時工作
+//   讀回寫交辦檔（review_live/status_writeback.jsonl）送出。`/api/patches` 只回
+//   queued／applied ⇒ 此值的列自然不畫「校對中」。
+export const STATUS_VALUES = ['queued', 'applied', 'rejected', 'published', 'reverted', 'superseded'];
 
 // C332：`turnstile` 欄的值域（舊列＝NULL＝本欄加入前收的，不是未驗）。
 export const TS_VALUES = ['ok', 'fail', 'missing', 'error', 'team'];
