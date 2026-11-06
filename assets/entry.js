@@ -440,7 +440,10 @@ function senseHTML(s, i, total, modern, zhStatus, e) {
       ? `<span class="zhline">${zhHTML(x.zh, x.zh_units)}</span>`
       : `<span class="pending">翻譯建置中</span>`;
     const orig = textOfUnits(x.tw_modern) + '＝' + (x.zh || '（翻譯建置中）');
-    return `<div class="example"${editAttr(ep + '.modern')}${origAttr(orig, twModernDump(x.tw_modern))}><span class="tw">${twModernHTML(x.tw_modern)}</span>` +
+    // C420（M065 §二.4① 末句、純畫面）：現代卡台語例句行掛 `data-v2m`＝該例句的 v2 前綴，
+    //   讓疊加層（`modernEls`）把同一筆 `…examples[j].tw`／`tw_ruby[k]` 修正的「校對中」也掛到這一行。
+    //   ⚠ 刻意**不用 `data-v2`**：`describeSlot` 拿 `data-v2` 判斷開哪種編輯框，掛上去會讓現代卡雙擊改開原冊葉的框。
+    return `<div class="example"${editAttr(ep + '.modern')}${origAttr(orig, twModernDump(x.tw_modern))}><span class="tw" data-v2m="${esc(ep)}">${twModernHTML(x.tw_modern)}</span>` +
            `<span class="eqsign">＝</span>${zh}</div>`;
   }).join('');
   // M032：標記級校改存印（SCHEMA_V2 §orig 標記級；首例 p0163-2-07）——只標原冊數位化層；印面無標記時 was 為 null → 顯示「（無）」
@@ -1952,6 +1955,29 @@ function wBind() {
   });
 }
 
+// ── C420（M065 §二.1①，站主准）：表頭分隔欄 `head.sep` 空值補齊＋值域＋表頭漢字擋連字號 ──
+// 骨架 `sep` 九成九是 `[]`，而 export `op_source` 對空槽不出鍵 ⇒ 原本切換鈕一律打不開。
+//   ⇒ 以 opsrc 的表頭音節數補成「ntok−1 個 ''」當現值；口徑＝`feedback_daily.head_sep_pad`
+//   （`validate_op` 與 `apply_console.skel_sep_changes` 同呼的那一支）。**不改 export 的 opsrc 輸出**。
+// ⚠ 下面兩個常數必須逐項等於 `feedback_daily.SEP_VALUES`／`KANJI_BAN_CH`（那一份是驗證器、是單一真相；
+//   本表只是瀏覽器端的前置篩）；由 `website/build/test_head_sep_pad.py` 機械對版。
+const SEP_VALUES = ['', '--', '|'];
+const KANJI_BAN_CH = ['-', '－'];
+function sepOldOf(src, i) {
+  if (!src || !Array.isArray(src.kana)) return undefined;
+  const n = Math.max(src.kana.length - 1, 0);
+  if (!(Number.isInteger(i) && i >= 0 && i < n)) return undefined;
+  const sep = Array.isArray(src.sep) ? src.sep : [];
+  return i < sep.length ? sep[i] : '';
+}
+function kanjiBanErr(path, nw) {
+  if (path !== 'head.kanji' || typeof nw !== 'string') return '';
+  const hit = KANJI_BAN_CH.filter(c => nw.indexOf(c) >= 0);
+  return hit.length
+    ? `表頭漢字不得含「${hit.join('」「')}」：輕聲（--）與詞界（|）請雙擊假名之間的分隔、用切換鈕改。`
+    : '';
+}
+
 // ── 雙擊的元素 → 槽位描述 ──────────────────────────────────────────────────
 // 回 {mode, path, old, host}；mode ∈ syl（音節）／leaf（文字葉）／sep（切換鈕）／desc（描述）。
 // **產不出 op 一律回 desc**——定案 §四 場 2 之 3 的「自動退描述模式並提示」。
@@ -1963,9 +1989,9 @@ function describeSlot(el) {
   const sep = el.closest('.ksep');
   if (sep) {
     const i = parseInt(sep.dataset.ksep, 10);
-    const cur = OPSRC && Array.isArray(OPSRC.sep) ? OPSRC.sep[i] : undefined;
+    const cur = sepOldOf(OPSRC, i);
     if (typeof cur !== 'string') {
-      return Object.assign(base, { why: '本條目沒有可改的音節分隔（`head.sep` 未建）' });
+      return Object.assign(base, { why: '拿不到這一格分隔的原值（opsrc 未載入或沒有表頭音節）' });
     }
     return { mode: 'sep', path: `head.sep[${i}]`, old: cur, editPath, host, why: '' };
   }
@@ -2212,6 +2238,9 @@ function buildOp() {
   const nw = (s.mode === 'sep') ? s.newSep : $('#editnew').value;
   if (typeof nw !== 'string') return { err: '請先選一個值。' };
   if (nw === s.old) return { err: '沒有改到東西。' };
+  if (s.mode === 'sep' && SEP_VALUES.indexOf(nw) < 0) return { err: '分隔只收「無」「-- 輕聲」「| 詞界」三種。' };
+  const kb = kanjiBanErr(s.path, nw);
+  if (kb) return { err: kb };
   if (/[\r\n]/.test(nw)) return { err: '修正值不得含換行（整葉值是一行）。' };
   if (nw.length > 300) return { err: '修正值過長（>300 字元）＝疑似整段重寫，請改用文字說明。' };
   return { op: { path: arr, old: s.old, new: nw } };
@@ -2379,6 +2408,23 @@ function pathEls(arr) {
   return Array.from(root.querySelectorAll(`[data-v2="${lp}"]`));
 }
 
+// C420（M065 §二.4① 末句、純畫面）：台語例句的修正（`…examples[j].tw` 葉／整葉、`…tw_ruby[k]` token）
+//   在現代卡那一行也要看得到「校對中」。現代卡畫的是現代化 POJ、不是原冊字 ⇒ **只掛徽章、不換字**
+//   （換字由整點發布後 export 重畫）。日文例句、釋義、表頭不在現代卡台語行上＝不對位。
+function modernTwKey(arr) {
+  if (!Array.isArray(arr) || arr[0] !== 'senses' || arr[2] !== 'examples') return '';
+  if (!(Number.isInteger(arr[1]) && Number.isInteger(arr[3]))) return '';
+  const ok = (arr.length === 5 && arr[4] === 'tw')
+          || (arr.length === 6 && arr[4] === 'tw_ruby' && Number.isInteger(arr[5]));
+  return ok ? `senses[${arr[1]}].examples[${arr[3]}]` : '';
+}
+function modernEls(arr) {
+  const k = modernTwKey(arr);
+  const root = $('#entry');
+  if (!k || !root) return [];
+  return Array.from(root.querySelectorAll(`[data-v2m="${k}"]`));
+}
+
 function setAnn(rbEl, text) {
   const a = rbEl.querySelector('.ann');
   if (a) a.textContent = text;
@@ -2414,6 +2460,10 @@ function paintPatch(p, live) {
     } else {
       el.textContent = String(p.op.new);                 // ⚠ 注音暫時不顯示（見上方長註）
     }
+    el.classList.add('patched');
+    el.appendChild(patchBadge(p));
+  }
+  for (const el of modernEls(arr)) {                     // C420：現代卡台語例句行＝只掛徽章、不換字
     el.classList.add('patched');
     el.appendChild(patchBadge(p));
   }

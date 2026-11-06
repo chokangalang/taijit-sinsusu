@@ -433,7 +433,9 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
   padding: 4px 10px; font-size: 15px; font-family: inherit; cursor: pointer;
   border: 1px solid var(--line); border-radius: 4px; background: #fff;
 }
-.sepbtn.cur { background: var(--bar); color: var(--bar-ink); border-color: var(--bar); }
+/* C420：加 `#editbox` 前綴＝權重壓過 `#editbox button` 的淺底（原本只有字色生效＝淺底淺字、現值鈕看不到字；
+   空 sep 補齊後九成九條目都開得到這個框，C420 本機目視撞到） */
+#editbox .sepbtn.cur { background: var(--bar); color: var(--bar-ink); border-color: var(--bar); }
 .src.warn { color: #9a3b2f; }
 
 /* C338（U116）：整葉注音編輯器。框＝可直接打字的一行字（散字），帶注音的詞塊是不可打字的整塊，
