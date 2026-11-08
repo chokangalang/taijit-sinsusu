@@ -358,11 +358,35 @@ function matchEntry(e, ctx, mode) {
   return best;
 }
 
+/* ── 腔口組（DESIGN_SEARCH §4.6；C429／U242，站主 M069_X3 §四）── */
+// 查詢字→全稱表不在前端另抄：export `dial_query_table()` 經 index.json 頂層 `dial_query` 交來；
+// 條目側比對鍵＝index 條目 `dial_full`（表頭各段＋參照槽級腔口註記之全稱，export `dial_search_keys`）。
+// 只認全等（去前後空白）：表內的短寫／全稱／全稱去「腔」才觸發；「安」「腔」「漳音」等不在表內＝不觸發。
+function dialQueryFull(q, table) {
+  const k = String(q || '').trim();
+  return (table && k && Object.prototype.hasOwnProperty.call(table, k)) ? table[k] : '';
+}
+// 腔口組命中：任一段全稱相符即中；組內照條目編號序（不跨組去重——組數即全庫該腔口條數）
+function dialCollect(index, full) {
+  if (!full) return [];
+  return (index || []).filter(e => (e.dial_full || []).indexOf(full) >= 0)
+    .sort((a, b) => (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)));
+}
+// 結果分組順序（§4.4／§4.6）：詞目→內文→腔口（最後一組）
+const RESULT_GROUPS = ['entry', 'content', 'dial'];
+// 腔口組外框：預設收合（open 只在使用者本查詢已點開時才帶）、只露標題與數量
+function dialGroupHTML(n, open) {
+  return `<details class="dialgrp"${open ? ' open' : ''}>` +
+    `<summary class="group-hd">腔口符合（${n} 條）</summary><ul class="dialrows"></ul></details>`;
+}
+
 /* ══════════ 以下 DOM（瀏覽器限定） ══════════ */
 
 if (typeof document !== 'undefined') {
 
   let INDEX = [];
+  let DIALQ = {};                       // C429：腔口查詢字→全稱（index.json 頂層 dial_query）
+  let DIAL_OPEN = '';                   // C429：使用者點開腔口組時的全稱（分片陸續到齊重繪時保持展開）
   let META = {};
   let BYID = new Map();                 // id → {e, ord}（內文命中顯示詞目用）
   let FORM = '';                        // 詞形 chip 狀態（''＝未啟用）
@@ -476,18 +500,19 @@ if (typeof document !== 'undefined') {
     return '';
   };
 
-  // ── 主渲染：條目組（現行邏輯）＋內文組（§4.4 分組不混排） ──
-  const render = (list, ctx, chits) => {
+  // ── 主渲染：條目組（現行邏輯）＋內文組（§4.4 分組不混排）＋腔口組（§4.6，最後一組、預設收合） ──
+  const render = (list, ctx, chits, dhits, dfull) => {
     const ul = $q('#results');
     const st = $q('#stats');
     ul.innerHTML = '';
+    dhits = dhits || [];
     if (!ctx.q && !FORM) {
       st.textContent = META.total
         ? `收錄 ${META.total} 條（完整 ${META.complete}・建置中 ${META.skeleton}）` : '';
       return;
     }
     const cload = contentStateText();
-    if (!list.length && !(chits && chits.length)) {
+    if (!list.length && !(chits && chits.length) && !dhits.length) {
       st.textContent = '查無結果' + (cload ? `（${cload}）` : '');
       hintLi(ul, '查無結果。可以試試：改用<b>模糊</b>模式、拿掉調號（如 a 代替 á）、' +
         '檢查輸入式（a5＝â、ann3＝àⁿ、oo2＝ó͘）、或用條目編號（如 p0052-1-01）。');
@@ -501,34 +526,60 @@ if (typeof document !== 'undefined') {
         ? `條目 ${list.length}（同調 ${nStrict}・異調 ${nOther}）`
         : `條目 ${list.length}`);
     if (!FORM && chits && chits.length) stat += `・內文 ${chits.length}`;
+    if (dhits.length) stat += `・腔口 ${dhits.length}`;
     if (cload && (FORM || (ctx.q && mode === 'fuzzy'))) stat += `・${cload}`;
     st.textContent = stat;
 
-    const frag = document.createDocumentFragment();
-    for (const hit of list.slice(0, 200)) {
-      const li = document.createElement('li');
-      li.innerHTML = rowHTML(hit.e, hit.m);
-      frag.appendChild(li);
-    }
-    ul.appendChild(frag);
-    if (list.length > 200) hintLi(ul, '條目僅顯示前 200 條，請縮小關鍵字。');
-
-    if (chits && chits.length) {
-      const hd = document.createElement('li');
-      hd.className = 'group-hd';
-      hd.textContent = `內文符合（${chits.length} 條）`;
-      ul.appendChild(hd);
-      const cfrag = document.createDocumentFragment();
-      for (const h of chits.slice(0, 100)) {
+    const groups = {
+      entry: () => {
+        const frag = document.createDocumentFragment();
+        for (const hit of list.slice(0, 200)) {
+          const li = document.createElement('li');
+          li.innerHTML = rowHTML(hit.e, hit.m);
+          frag.appendChild(li);
+        }
+        ul.appendChild(frag);
+        if (list.length > 200) hintLi(ul, '條目僅顯示前 200 條，請縮小關鍵字。');
+      },
+      content: () => {
+        if (chits && chits.length) {
+          const hd = document.createElement('li');
+          hd.className = 'group-hd';
+          hd.textContent = `內文符合（${chits.length} 條）`;
+          ul.appendChild(hd);
+          const cfrag = document.createDocumentFragment();
+          for (const h of chits.slice(0, 100)) {
+            const li = document.createElement('li');
+            li.innerHTML = contentRowHTML(h);
+            cfrag.appendChild(li);
+          }
+          ul.appendChild(cfrag);
+          if (chits.length > 100) hintLi(ul, '內文僅顯示前 100 條，請縮小關鍵字。');
+        } else if ((FORM || (ctx.q && mode === 'fuzzy')) && CSTATE.status === 'error') {
+          hintLi(ul, '內文索引載入失敗。<a href="#" id="cretry">重新載入內文索引</a>');
+        }
+      },
+      dial: () => {
+        if (!dhits.length) return;
         const li = document.createElement('li');
-        li.innerHTML = contentRowHTML(h);
-        cfrag.appendChild(li);
-      }
-      ul.appendChild(cfrag);
-      if (chits.length > 100) hintLi(ul, '內文僅顯示前 100 條，請縮小關鍵字。');
-    } else if ((FORM || (ctx.q && mode === 'fuzzy')) && CSTATE.status === 'error') {
-      hintLi(ul, '內文索引載入失敗。<a href="#" id="cretry">重新載入內文索引</a>');
-    }
+        li.className = 'dialgrp-li';
+        const open = DIAL_OPEN === dfull;
+        li.innerHTML = dialGroupHTML(dhits.length, open);
+        const det = li.querySelector('details');
+        const fill = () => {                 // 點開才畫列（收合時不畫＝單字「漳」數百條也不拖慢打字）
+          const box = det.querySelector('.dialrows');
+          if (box.childElementCount) return;
+          box.innerHTML = dhits.map(e => `<li>${rowHTML(e, { tier: 0, other: false })}</li>`).join('');
+        };
+        if (open) fill();
+        det.addEventListener('toggle', () => {
+          DIAL_OPEN = det.open ? dfull : '';
+          if (det.open) fill();
+        });
+        ul.appendChild(li);
+      },
+    };
+    for (const g of RESULT_GROUPS) groups[g]();
   };
 
   // ── 內文命中收集（模糊模式限定；排除已在條目組者；欄位權重→冊序） ──
@@ -597,7 +648,10 @@ if (typeof document !== 'undefined') {
     }
     hits.sort((a, b) => b.m.tier - a.m.tier);       // 同 tier 保持冊序
     const seen = new Set(hits.map(h => h.e.id));
-    render(hits, ctx, collectContent(ctx, seen));
+    // C429（§4.6）：腔口組——精確／模糊兩模式都出（查詢字全等才觸發）；編號查詢不出
+    const dfull = ctx.idQ ? '' : dialQueryFull(ctx.q, DIALQ);
+    if (dfull !== DIAL_OPEN) DIAL_OPEN = '';        // 換了腔口（或不再是腔口查詢）＝回到預設收合
+    render(hits, ctx, collectContent(ctx, seen), dialCollect(INDEX, dfull), dfull);
   };
 
   // ── 內文索引：閒置預抓、逐片漸進、失敗可重試（§4.5） ──
@@ -651,7 +705,9 @@ if (typeof document !== 'undefined') {
   const init = async () => {
     try {
       const rs = await Promise.all([fetch('data/index.json'), fetch('data/meta.json')]);
-      INDEX = (await rs[0].json()).entries;
+      const ij = await rs[0].json();
+      INDEX = ij.entries;
+      DIALQ = ij.dial_query || {};           // C429：舊資料無此鍵＝腔口組不出（不報錯）
       META = await rs[1].json();
     } catch (e) {
       $q('#stats').textContent = '索引載入失敗（請經由本機伺服器開啟，不能直接雙擊檔案）';
@@ -720,5 +776,7 @@ if (typeof globalThis !== 'undefined') {
                               contentBadge: contentBadge, contentScan: contentScan,
                               snippet: snippet, normKanaQ: normKanaQ,
                               formSpanMatch: formSpanMatch,
-                              contentFormMatch: contentFormMatch };
+                              contentFormMatch: contentFormMatch,
+                              dialQueryFull: dialQueryFull, dialCollect: dialCollect,
+                              RESULT_GROUPS: RESULT_GROUPS, dialGroupHTML: dialGroupHTML };
 }

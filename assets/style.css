@@ -325,6 +325,14 @@ body.proof [data-edit]:hover { outline: 1px dashed var(--badge); outline-offset:
   font-size: 13px; color: var(--sub); letter-spacing: .1em; font-weight: 700;
   padding: 14px 4px 5px;
 }
+/* C429（U242；DESIGN_SEARCH §4.6）：腔口組＝最後一組、預設收合（<details>），標題同分組標題 */
+.results li.dialgrp-li { border-bottom: 0; }
+.results details.dialgrp > summary.group-hd {
+  border-bottom: 1px solid var(--line);
+  font-size: 13px; color: var(--sub); letter-spacing: .1em; font-weight: 700;
+  padding: 14px 4px 5px; cursor: pointer;
+}
+.results ul.dialrows { list-style: none; margin: 0; padding: 0; }
 .results a.row.crow .hz { font-size: 19px; min-width: 56px; }
 .results a.row.crow .pj { font-size: 14px; }
 .results a.row.crow .kn { font-size: 12px; }
