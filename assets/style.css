@@ -366,6 +366,8 @@ header.top .title .sitelogo { vertical-align: baseline; }
 
 /* 腔口註記（2026-07-25 rid 115）：表頭 POJ 右側淺色小字（漳）（泉）（同安）… */
 .entryhead .dial { font-size: 16px; color: var(--sub); }
+/* C426（M065 第 8 件）：團隊模式、站面沒有腔口時的雙擊入口（（腔口）淡字） */
+.entryhead .dial.dialset { opacity: .5; border-bottom: 1px dashed var(--sub); cursor: pointer; }
 .results .dial { font-size: 13px; color: var(--sub); }
 .results a.row.crow .dial { font-size: 12px; }
 

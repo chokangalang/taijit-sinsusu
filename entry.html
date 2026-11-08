@@ -63,6 +63,7 @@
        editsyl ＝音節編輯器（假名／調號／鼻音／送氣＋POJ 即時換算）
        editleaf＝文字葉編輯器（整葉值＋符號鈕）
        editsep ＝head.sep[i] 切換鈕（無／--／|）
+       editdial＝head.dial 表頭人工腔口選單（自動／無／白名單組合；C426）
        editdesc＝描述模式（產不出機器可讀改法時的正常出口，不是失敗）
      C338（U116，站主 M053 補函第 5 條）：
        editwhole＝整葉注音編輯器（釋義／例句台文／例句日文：整葉文字＋注音清單一筆送出） -->
@@ -182,6 +183,15 @@
       <label class="src">音節之間（<code>--</code>＝輕聲、<code>|</code>＝詞界、無＝一般連寫）</label>
       <p class="src" id="edsepnow"></p>
       <div class="edrow" id="edsepbtns"></div>
+    </div>
+
+    <!-- C426（M065 第 8 件）：表頭人工腔口欄（head.dial）。雙擊表頭旁的（腔口）開這一面。 -->
+    <div id="editdial" class="edpane">
+      <label class="src">表頭腔口：「自動」＝依原冊腔口註自動判；「無」＝強制不升表頭；
+        點腔口鈕＝人工指定（多個時照原冊順序依序點，值以「、」並列；再點一次＝拿掉）</label>
+      <p class="src" id="eddialnow"></p>
+      <div class="edrow" id="eddialbtns"></div>
+      <p class="src" id="eddialnew"></p>
     </div>
 
     <div id="editdesc" class="edpane">

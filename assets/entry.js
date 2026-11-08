@@ -29,10 +29,11 @@ let OPSRC = null;
 //   三份由 `website/build/test_op_syntax.py` 機械對版——照定案 §三「path 互轉 JS／Python
 //   各一份、無法單一來源 ⇒ 設同步戳」之處置（體例同 `AN_DOM_SYNC`）。
 //   **改任一邊必同批改另外兩邊並 bump 戳。**
-const PATH_SYNTAX_VERSION = 'C338';  // C338（U116）：opsrc 加 gr／jr、白名單拿掉 .c 葉
+const PATH_SYNTAX_VERSION = 'C426';  // C426（M065 第 8 件）：白名單加 head.dial、opsrc 加 dial（C338：gr／jr、拿掉 .c 葉）
 const OP_LEAF_SHAPES = [            // 葉型：old/new＝整個字串葉值（帶注音的三種文字葉另收整葉型，見 WHOLE_LEAF_SHAPES）
   ['head', 'kanji'],
   ['head', 'sep', '#'],
+  ['head', 'dial'],
   ['senses', '#', 'gloss', 'jp'],
   ['senses', '#', 'gloss', 'ruby', '#', 'k'],
   ['senses', '#', 'examples', '#', 'tw'],
@@ -754,12 +755,23 @@ function headStrip(e, withKana) {
   return `<div class="entryhead">
     ${hzHTML}
     ${blank ? '' : `<span class="pj"${h.poj_star ? ' title="採校訂值（見原冊區＊註）"' : ''}>${esc(h.poj)}${h.poj_star ? '*' : ''}${unc}</span>`}
-    ${h.dial ? `<span class="dial" title="腔口註記：原冊印於釋義處（照印見原冊數位化區）">（${esc(h.dial)}）</span>` : ''}
+    ${dialHTML(h)}
     ${withKana ? `<span class="kn"${knAttrs}>${headKanaHTML(h)}</span>` : ''}${skelChip}${proofChip}
     <button class="reportbtn hd" data-block="表頭">回報錯誤</button>${commentLink(e)}
     <span class="loc">${esc(locText(e))}</span>
     ${navHTML(e)}
   </div>`;
+}
+
+// C426（M065 第 8 件）：表頭腔口。讀者模式＝與 C426 前逐字相同（有值才畫、不掛 data-edit）；
+//   團隊模式＝一律畫（沒值畫「（腔口）」淡字）並掛 `data-edit="head"`，雙擊開腔口選單（`describeSlot` 的 dial 面）。
+function dialHTML(h) {
+  if (!TEAM.on) {
+    return h.dial ? `<span class="dial" title="腔口註記：原冊印於釋義處（照印見原冊數位化區）">（${esc(h.dial)}）</span>` : '';
+  }
+  return h.dial
+    ? `<span class="dial"${editAttr('head')} title="腔口註記：原冊印於釋義處（團隊模式：雙擊可人工設定）">（${esc(h.dial)}）</span>`
+    : `<span class="dial dialset"${editAttr('head')} title="團隊模式：雙擊設定表頭腔口（自動／無／白名單組合）">（腔口）</span>`;
 }
 
 // C332（M050 場 3 之 3）：條目頁顯示留言數（定案 §四 場 3「批注卡或表頭條」⇒ 取表頭條：
@@ -1203,6 +1215,9 @@ function leafOld(arr) {
   try {
     if (arr.length === 2 && arr[0] === 'head' && arr[1] === 'kanji') {
       return String(e.head.kanji == null ? '' : e.head.kanji);
+    }
+    if (arr.length === 2 && arr[0] === 'head' && arr[1] === 'dial') {
+      return OPSRC ? dialOldOf(OPSRC) : null;   // C426：人工欄現值在 opsrc（站面 head.dial 是判完的結果）
     }
     if (arr[0] !== 'senses') return null;
     const sn = (e.senses || [])[arr[1]];
@@ -1970,6 +1985,51 @@ function sepOldOf(src, i) {
   const sep = Array.isArray(src.sep) ? src.sep : [];
   return i < sep.length ? sep[i] : '';
 }
+// ── C426（M065 第 8 件，站主准）：表頭人工腔口欄 `head.dial` ──
+// 骨架鍵 `dial`：有填照填、「無」＝強制不升、缺鍵（''）＝走自動。新值只收三種：''／「無」／白名單成員以「、」相連（不重複）。
+// ⚠ `DIAL_MEMBERS` 必須與 `export_site_data.DIAL_WHITELIST` 成員相同、`DIAL_MANUAL_NONE`／`DIAL_SEP` 必須與同名常數相等
+//   （那一份＋`dial_value` 是驗證器用的單一真相；本表只是瀏覽器端的前置篩與選單）；由 `test_dial_multi_manual.py` 機械對版。
+//   陣列序＝選單鈕的排列序，不是值的順序（值的順序＝校對者照原冊依序點選）。
+const DIAL_MEMBERS = ['漳', '泉', '同', '同安', '同安音', '廈', '廈門', '潮'];
+const DIAL_MANUAL_NONE = '無';
+const DIAL_SEP = '、';
+function dialOldOf(src) {
+  return (src && typeof src.dial === 'string') ? src.dial : '';
+}
+function dialNewOk(v) {
+  if (typeof v !== 'string') return false;
+  if (v === '' || v === DIAL_MANUAL_NONE) return true;
+  const parts = v.split(DIAL_SEP);
+  return parts.length === new Set(parts).size && parts.every(p => DIAL_MEMBERS.indexOf(p) >= 0);
+}
+function dialLabel(v) {
+  if (v === '') return '自動（依原冊腔口註自動判）';
+  if (v === DIAL_MANUAL_NONE) return '無（強制不升表頭）';
+  return `（${v}）`;
+}
+// 點腔口鈕：目前是自動／無＝從這個成員重新開始；已含該成員＝拿掉；否則接在後面（點的順序＝值的順序）
+function dialToggle(cur, m) {
+  if (cur === '' || cur === DIAL_MANUAL_NONE) return m;
+  const parts = cur.split(DIAL_SEP);
+  const i = parts.indexOf(m);
+  if (i >= 0) parts.splice(i, 1); else parts.push(m);
+  return parts.join(DIAL_SEP);
+}
+function dialRender() {
+  const s = editSlot;
+  if (!s || s.mode !== 'dial') return;
+  const shown = (ENTRY && ENTRY.head && ENTRY.head.dial) ? `（${ENTRY.head.dial}）` : '（不顯示）';
+  $('#eddialnow').textContent = `人工欄現值：${dialLabel(s.old)}；站面目前顯示：${shown}`;
+  const isMember = s.newDial !== '' && s.newDial !== DIAL_MANUAL_NONE;
+  const parts = isMember ? s.newDial.split(DIAL_SEP) : [];
+  const btn = (act, lab, on) =>
+    `<button type="button" class="sepbtn dialbtn${on ? ' cur' : ''}" data-dial="${esc(act)}">${esc(lab)}</button>`;
+  $('#eddialbtns').innerHTML = btn('', '自動', s.newDial === '')
+    + btn(DIAL_MANUAL_NONE, '無（不升）', s.newDial === DIAL_MANUAL_NONE)
+    + DIAL_MEMBERS.map(m => btn('+' + m, m, parts.indexOf(m) >= 0)).join('');
+  $('#eddialnew').textContent = `將送出：${dialLabel(s.newDial)}`;
+}
+
 function kanjiBanErr(path, nw) {
   if (path !== 'head.kanji' || typeof nw !== 'string') return '';
   const hit = KANJI_BAN_CH.filter(c => nw.indexOf(c) >= 0);
@@ -1994,6 +2054,12 @@ function describeSlot(el) {
       return Object.assign(base, { why: '拿不到這一格分隔的原值（opsrc 未載入或沒有表頭音節）' });
     }
     return { mode: 'sep', path: `head.sep[${i}]`, old: cur, editPath, host, why: '' };
+  }
+
+  const dl = el.closest('.dial');                // C426：表頭腔口（團隊模式才掛 data-edit、才走得到這裡）
+  if (dl) {
+    if (!OPSRC) return Object.assign(base, { why: '拿不到表頭腔口欄的原值（opsrc 未載入）' });
+    return { mode: 'dial', path: 'head.dial', old: dialOldOf(OPSRC), editPath, host, why: '' };
   }
 
   const kt = el.closest('.kt');
@@ -2065,7 +2131,7 @@ function describeSlot(el) {
 const SYMS = ['□', 'ーー', '〳〵', '〴〵', '、', '。', '・', '「', '」'];
 
 function showPane(mode) {
-  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdesc', 'editwhole']) {
+  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdial', 'editdesc', 'editwhole']) {
     const el = $('#' + id);
     if (el) el.classList.toggle('on', id === 'edit' + mode);
   }
@@ -2133,6 +2199,9 @@ function openEdit(el) {
       `<button type="button" class="sepbtn${v === s.old ? ' cur' : ''}" data-sep="${esc(v)}">${esc(lab)}</button>`
     ).join('');
     $('#edsepnow').textContent = `現值：${s.old === '' ? '（無）' : s.old}`;
+  } else if (s.mode === 'dial') {
+    s.newDial = s.old;
+    dialRender();
   } else {
     // 退描述模式並提示為什麼（定案 §四 場 2 之 3）
     $('#editwhy').textContent = s.why
@@ -2142,7 +2211,7 @@ function openEdit(el) {
   }
   showPane(s.mode);
   $('#editbox').classList.add('on');
-  const first = { syl: '#edkana', leaf: '#editnew', sep: '#edsepbtns', desc: '#editdesctext',
+  const first = { syl: '#edkana', leaf: '#editnew', sep: '#edsepbtns', dial: '#eddialbtns', desc: '#editdesctext',
                   whole: '#edwtext' }[s.mode];
   const f = $(first);
   if (f && f.focus) f.focus();
@@ -2234,6 +2303,13 @@ function buildOp() {
     if (!nw.k) return { err: '假名不得為空。' };
     if (sameToken(nw, s.old)) return { err: '沒有改到東西。' };
     return { op: { path: arr, old: s.old, new: nw } };
+  }
+  if (s.mode === 'dial') {
+    const nd = s.newDial;
+    if (typeof nd !== 'string') return { err: '請先選一個值。' };
+    if (nd === s.old) return { err: '沒有改到東西。' };
+    if (!dialNewOk(nd)) return { err: '腔口只收「自動」「無」或腔口鈕的組合。' };
+    return { op: { path: arr, old: s.old, new: nd } };
   }
   const nw = (s.mode === 'sep') ? s.newSep : $('#editnew').value;
   if (typeof nw !== 'string') return { err: '請先選一個值。' };
@@ -2378,6 +2454,9 @@ function pathEls(arr) {
   if (arr[0] === 'head' && arr[1] === 'sep') {
     return Array.from(root.querySelectorAll(`.ksep[data-ksep="${arr[2]}"]`));
   }
+  if (arr.length === 2 && arr[0] === 'head' && arr[1] === 'dial') {   // C426
+    return Array.from(root.querySelectorAll('.entryhead .dial'));
+  }
   const last = arr[arr.length - 1];
   if (last === 'k' || last === 'c') {                    // ruby 葉
     const ri = arr[arr.length - 2];
@@ -2451,6 +2530,10 @@ function paintPatch(p, live) {
       if (em) el.appendChild(em);
     } else if (arr[0] === 'head' && arr[1] === 'sep') {
       el.textContent = p.op.new === '--' ? '--' : (p.op.new ? ' ' : '');
+    } else if (arr.length === 2 && arr[0] === 'head' && arr[1] === 'dial') {
+      // C426：人工欄＝''（回到自動，判完的值要等整點發布才知道）／「無」／組合
+      el.textContent = p.op.new === '' ? '（腔口：自動）'
+        : p.op.new === DIAL_MANUAL_NONE ? '（腔口：不升）' : `（${p.op.new}）`;
     } else if (last === 'k') {
       setAnn(el, String(p.op.new));
     } else if (last === 'c') {
@@ -2746,6 +2829,15 @@ async function init() {
       editSlot.newSep = b.dataset.sep;
       $('#edsepbtns').querySelectorAll('.sepbtn')
         .forEach(x => x.classList.toggle('cur', x === b));
+    });
+  }
+  if ($('#eddialbtns')) {                      // C426：表頭腔口選單
+    $('#eddialbtns').addEventListener('click', ev => {
+      const b = ev.target.closest('.dialbtn');
+      if (!b || !editSlot || editSlot.mode !== 'dial') return;
+      const act = b.dataset.dial || '';
+      editSlot.newDial = act.charAt(0) === '+' ? dialToggle(editSlot.newDial, act.slice(1)) : act;
+      dialRender();
     });
   }
   for (const eid of ['edpoj', 'edkana', 'edtone', 'ednasal', 'edasp']) {
