@@ -505,6 +505,12 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 }
 .patch.queued { background: #f6e8b8; color: #6b4b2d; border-color: #e0cd93; }
 .patch.applied { background: #dce9d5; color: #33562a; border-color: #b9d3ad; }
+/* C427（M065 §二.4①）：無 op 送件的「已有人回報（校對中）」＝只是提醒、不改字 ⇒ 虛線框、不填底色，
+   與「校對中」（已疊上新值）分得出來 */
+/* C427（M065 §二.3②）：團隊模式的未上站批注（新增／修改／刪除）＝淡底色；刪除那則加刪除線 */
+.anitem.pending { background: #fdf6df; border-radius: 3px; }
+.anitem.pendel .antext { text-decoration: line-through; color: #8a7a66; }
+.patch.reported { background: transparent; color: #6b4b2d; border: 1px dashed #c9b27a; cursor: help; }
 .patchundo { margin-left: 5px; color: inherit; text-decoration: underline; cursor: pointer; }
 .patched { background: #fdf6df; border-radius: 3px; }
 

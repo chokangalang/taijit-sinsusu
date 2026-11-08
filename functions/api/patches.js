@@ -17,8 +17,38 @@
 // ⚠ `cache-control: no-store`：疊加層的存在前提是「重新整理即見」（定案 §二 14），
 //   被邊緣快取住就等於沒有。
 //
-// 單一真相＝`feedback.js` 匯出的 `json`（M033 §0.3；理由同 `team.js` 檔頭）。
-import { json } from './feedback.js';
+//
+// ── C427（站主 M065 §二.4① 准；M050 §二 14 但書）：多回 `reported`＝「已有人回報（校對中）」記號 ──
+//   該條目**團隊、queued、沒有 op** 的列。**只回位置（path／block）、類別（cat）、fid，不回送件文字**
+//   ——欄位白名單寫死在下面那句 `SELECT`（不是取全列再刪欄：刪欄那一步一漏，文字就上了讀者畫面）。
+//   `note`／`before`／`after`／`reporter`／`quote`／`fixkind`／`op` 一律不在選單上。
+//   全員可見（記號無文字）。上面第 ② 道「不把別人送的文字露在條目上」照舊成立。
+//   ⚠ 排除 `批注`（未上站批注只限團隊模式＝M050 §二 14 但書，另一條路）與 `留言`（不是待校的錯）；
+//     `cat` 在 C332 之前的舊列可能是 NULL ⇒ `COALESCE`，否則 `NOT IN` 碰 NULL 整列消失。
+//   ⚠ 這一句出錯只讓 `reported` 退空陣列，**不拖垮**上面那句疊加層（兩件事各自獨立）。
+//   只收 `queued`：`applied` 是快車道已套、等發布的（有 op 才會被套），無 op 列不會停在 applied；
+//     裁完的件由丁場回寫交辦檔改 status，記號自然消失。
+export const REPORTED_SQL = 'SELECT fid,path,block,cat FROM feedback'
+  + " WHERE id = ? AND role = 'team' AND status = 'queued'"
+  + " AND (op IS NULL OR op = '')"
+  + " AND COALESCE(cat,'') NOT IN ('批注','留言')"
+  + ' ORDER BY fid LIMIT 200';
+
+//
+// ── C427（站主 M065 §二.3②；M050 §二 14 但書「批注類未上站只限團隊模式顯示」）：`annots` ──
+//   **只在請求帶有效團隊鑰匙（`Authorization: Bearer`）時**多回該條目團隊、queued、`cat=批注` 的列
+//   ＝前端團隊模式把未上站批注畫成「校對中」。不帶鑰匙／鑰匙無效＝回應**根本沒有 `annots` 鍵**
+//   （不是空陣列）——一般讀者的回應與 C427 之前逐鍵相同（`patches`／`reported` 兩鍵＋`ok`／`id`）。
+//   鑰匙只收標頭、不收 query（鑰匙不進存取紀錄的 URL；`team.js` 收 query 是登入那一下的既有例外）。
+//   回的欄＝畫面要用的：`fid,path,quote,fixkind,note,before,reporter`（note＝批注本文／刪除理由；
+//   before＝修改／刪除的目標 nid 或取消件的目標 fid；reporter＝團隊暱稱，用來判斷「自己的才給撤回」）。
+//   這一句出錯＝`annots` 退空陣列、其餘照回。
+export const TEAM_ANNOT_SQL = 'SELECT fid,path,quote,fixkind,note,before,reporter FROM feedback'
+  + " WHERE id = ? AND role = 'team' AND status = 'queued' AND cat = '批注'"
+  + ' ORDER BY fid LIMIT 200';
+
+// 單一真相＝`feedback.js` 匯出的 `json`／`teamNameFor`／`bearer`（M033 §0.3；理由同 `team.js` 檔頭）。
+import { json, teamNameFor, bearer } from './feedback.js';
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
@@ -34,7 +64,23 @@ export async function onRequestGet({ request, env }) {
       + " AND op IS NOT NULL AND op <> ''"
       + ' ORDER BY fid LIMIT 200'
     ).bind(id).all();
-    return json({ ok: true, id, patches: rs.results || [] }, 200, NO_STORE);
+    let reported = [];
+    try {
+      const r2 = await env.DB.prepare(REPORTED_SQL).bind(id).all();
+      reported = r2.results || [];
+    } catch (e) {
+      reported = [];
+    }
+    const body = { ok: true, id, patches: rs.results || [], reported };
+    if (teamNameFor(env, bearer(request))) {
+      try {
+        const r3 = await env.DB.prepare(TEAM_ANNOT_SQL).bind(id).all();
+        body.annots = r3.results || [];
+      } catch (e) {
+        body.annots = [];
+      }
+    }
+    return json(body, 200, NO_STORE);
   } catch (e) {
     return json({ ok: false, err: 'server' }, 500, NO_STORE);
   }

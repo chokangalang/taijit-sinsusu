@@ -613,8 +613,10 @@ function blockAnnots(e) {
     const back = a.path ? `<a class="anback" href="#${esc(a.nid)}-m" title="回到本文記號">${n}</a>`
                         : `<span class="anback off">${n}</span>`;
     const dt = a.date ? `<span class="andate">${esc(a.date)}</span>` : '';
+    // C427（站主 M065 §二.3①）：團隊軟刪除＝送刪除件、快車道改 hidden、站主後審表可撤回
     const ed = TEAM.on
-      ? `<button type="button" class="anbtn anedit" data-nid="${esc(a.nid)}" title="修改這則批注的文字或性質（快車道直接上站，站主事後追認）">修改</button>` : '';
+      ? `<button type="button" class="anbtn anedit" data-nid="${esc(a.nid)}" title="修改這則批注的文字或性質（快車道直接上站，站主事後追認）">修改</button>`
+        + `<button type="button" class="anbtn andel" data-nid="${esc(a.nid)}" title="刪除這則批注（下一個整點下架；站主事後可在後審表撤回）">刪除</button>` : '';
     return `<li class="anitem" id="${esc(a.nid)}">${back}` +
            `<span class="ankind">${esc(a.kind)}</span>` +
            `<span class="antext">${esc(a.text)}</span>${dt}${ed}</li>`;
@@ -651,10 +653,15 @@ function blockAnnots(e) {
 //   （JS＝渲染端、Python＝驗收端）。照 M050 定案 §十一 對「path 互轉 JS／Python 各一份」的處置
 //   ＝**改同步戳**：兩邊各帶一個戳，`test_export` 讀本檔原始碼斷言兩戳相等 ⇒ 漂移是機械可見的，
 //   不是靠誰記得。**改本表必同時改那一支並 bump 兩邊的戳。**
-const AN_DOM_SYNC = 'C322';
+// C427（站主 M065 §二.2）升戳：錨點擴到台語例句＝多三列（現代卡 `tw_modern`；原冊層 `tw`／`jp`）。
+//   收窄寫 `:scope > .tw`＝只取例句 div 的**直接子** `.tw` 行——ruby 盒自己也帶 `rb tw` 類名，寫 `.tw` 會先撞到它。
+const AN_DOM_SYNC = 'C427';
 const AN_DOM_PATH = [
   // [資料路徑, DOM 宿主之 data-edit 值, 宿主內之範圍選擇器（null＝宿主自己就是該欄）]
   [/^(senses\[\d+\]\.examples\[\d+\])\.zh$/, '$1.modern', '.zhline'],
+  [/^(senses\[\d+\]\.examples\[\d+\])\.tw_modern$/, '$1.modern', ':scope > .tw'],
+  [/^(senses\[\d+\]\.examples\[\d+\])\.tw$/, '$1', ':scope > .tw'],
+  [/^(senses\[\d+\]\.examples\[\d+\])\.jp$/, '$1', ':scope > .jp'],
   [/^head\.[A-Za-z_]\w*$/, 'head', null],
 ];
 function annDomPath(path) {
@@ -667,20 +674,40 @@ function annDomPath(path) {
 // 在錨點元素內找 quote，把記號插在該字之後；ruby 注音盒（.ann）與 <rt> 內的文字不算
 //（那是注音、不是本文；在注音裡命中會把記號插進假名中間）。
 // ⚠ 注音盒的**底字**不在此列——它是 `.ann` 的兄弟節點、是本文，故放行（C322 覆核，行為不變）。
+// C427：台語例句每個字是一個 ruby 盒（底字各自一個文字節點）⇒ 引文「較沒大」跨三個節點，
+//   逐節點 indexOf 永遠找不到。改成把可接受的文字節點**連起來**找（`annLocate`，純函式、node 可測），
+//   再回推落在哪個節點的哪個位置。`sup`（調號上標、校改 †、別則批注的記號數字）也不算本文。
+//   引文結束在 ruby 盒底字的尾端時，記號放在**盒子後面**（放進盒內會被當成底字的一部分排版）。
+function annLocate(texts, quote) {
+  const q = String(quote || '');
+  if (!q) return null;
+  const k = texts.join('').indexOf(q);
+  if (k < 0) return null;
+  const end = k + q.length;
+  let at = 0;
+  for (let i = 0; i < texts.length; i++) {
+    const len = texts[i].length;
+    if (end > at && end <= at + len) return { i, off: end - at };
+    at += len;
+  }
+  return null;
+}
 function insertAfterQuote(el, quote, sup) {
   const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: n => (n.parentElement && n.parentElement.closest('.ann, rt'))
+    acceptNode: n => (n.parentElement && n.parentElement.closest('.ann, rt, sup'))
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
   });
+  const ns = [];
   let n;
-  while ((n = w.nextNode())) {
-    const k = n.nodeValue.indexOf(quote);
-    if (k < 0) continue;
-    const rest = n.splitText(k + quote.length);
-    rest.parentNode.insertBefore(sup, rest);
-    return true;
-  }
-  return false;
+  while ((n = w.nextNode())) ns.push(n);
+  const hit = annLocate(ns.map(x => x.nodeValue), quote);
+  if (!hit) return false;
+  const node = ns[hit.i];
+  const rest = node.splitText(hit.off);
+  const box = node.parentElement && node.parentElement.closest('.rb');
+  if (box && el.contains(box) && rest.nodeValue === '') box.parentNode.insertBefore(sup, box.nextSibling);
+  else rest.parentNode.insertBefore(sup, rest);
+  return true;
 }
 
 // 渲染後放記號（§二 5）：找到 quote → 插在字後；找不到／無 quote／`.gloss`（帶假名 ruby）→ 行尾。
@@ -701,7 +728,8 @@ function placeMarkers(e, root) {
     sup.id = a.nid + '-m';
     sup.innerHTML = `<a href="#${a.nid}" title="做工á人批注 ${i + 1}">${i + 1}</a>`;
     const atEnd = !a.quote || !scoped || host.classList.contains('gloss');
-    if (atEnd || !insertAfterQuote(scoped, a.quote, sup)) host.appendChild(sup);
+    // C427：退行尾時落在**收窄後那一欄**的尾端（台語行的記號不可跑到同一 div 裡中譯行的後面）
+    if (atEnd || !insertAfterQuote(scoped, a.quote, sup)) (scoped || host).appendChild(sup);
   });
 }
 
@@ -865,6 +893,11 @@ const BLOCK_CAT = { '表頭': '表頭', '原冊數位化': '原冊改錯字', '�
 //   `test_report_dialog.py` 讀兩邊原始碼斷言相等。批注草稿的 kind 借 D1 `fixkind` 欄送
 //   （C330 自裁、`SOP_拉校對` §十 第 2 條）。
 const ANNOT_KINDS_UI = ['補充', '異見', '理由'];
+// C427：兩個「動作」值借同一個 `fixkind` 欄送（不是批注性質、不進批注檔）：
+//   刪除＝對已上站那則送刪除件（`before`＝nid）；取消＝撤回自己還沒落地的批注件（`before`＝那筆的 fid）。
+//   單一真相＝`review_live/apply_annots.KIND_HIDE`／`fastlane_hourly.FIXKIND_CANCEL`（test_annot_softdelete 對版）。
+const ANNOT_KIND_DEL = '刪除';
+const ANNOT_KIND_CANCEL = '取消';
 const CAT_HINT = {
   // ⚠ 不寫「一小時內」：每小時工作只在有快車道修正時才發布（`fastlane_hourly` 步 11），
   //   留言要等下一次發布（C332 實查）。
@@ -902,29 +935,57 @@ function annResolve(entry, path) {
 //   `hostPath`＝`[data-edit]` 的值（**版面**詞彙），要換成**資料**路徑才是批注的 path
 //   （兩者不是同一組字串，見上方 `AN_DOM_PATH` 的長註）：
 //   ・現代化例句欄 `…examples[j].modern`：選在中譯行（`.zhline`）＝`…examples[j].zh`；
-//     選在台語行＝在該例句的字串欄裡找含引文者。
+//     選在台語行＝`…examples[j].tw_modern`（C427：單位陣列、引文比對連起來的字）。
+//   ・原冊層例句欄 `…examples[j]`（C427）：選在台語行＝`.tw`、日文行＝`.jp`（`line` 判定）；
+//     `line` 不明（雙擊入口）＝引文對得上 `.tw`／`.jp` 才用，否則照舊退宿主路徑、丟引文。
 //   ・表頭 `head`：`head.kanji` → `head.poj` 依序找含引文者。
 //   ・其餘：宿主路徑本身是字串欄就用它；是物件就在**直接子欄**（不含 `*_units`、**不含 `zh`**）裡找
 //     含引文者。⚠ 不含 `zh`：原冊層例句的 `tw`／`jp` 是 units 陣列、只有 `zh` 是字串（C332 實查
 //     p0092-1-06），在原冊層選了「油」若往 `zh` 找就會錨到現代層的中譯上——選的明明是日文。
 //   找不到含引文的字串欄＝退用宿主本身的路徑、丟引文（解析得出、記號落該欄行尾；定案 §二 5 設計內）。
 //   路徑全解析不出＝回空，由站主在卡面補（`apply_annots` 的錨點閘擋空路徑，不會寫壞）。
-function annDraftAnchor(entry, hostPath, inZh, quote) {
+// C427（站主 M065 §二.2 准）：錨點值是逐字單位陣列時，比對「連起來的字」（各格 `u`；注音／POJ 不算）。
+//   **與 `export_site_data.annot_anchor_text` 同一口徑**（`apply_annots` ③ 呼叫那一支）；兩份由
+//   `test_annot_units_anchor` 拿真站面條目逐欄對版。不能比對者回 null。
+function annAnchorText(v) {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v) && v.length && v.every(x => x && typeof x === 'object' && typeof x.u === 'string')) {
+    return v.map(x => x.u).join('');
+  }
+  return null;
+}
+// 只有這幾欄用單位陣列口徑當錨點（站主准的射程＝台語例句；原冊層同一個例句 div 裡的日文行一併，
+//   免得在日文行選字被錨到台語行上）。釋義 `gloss` 等其餘單位陣列照舊＝留路徑、丟引文。
+const AN_UNITS_ANCHOR = /^senses\[\d+\]\.examples\[\d+\]\.(tw|tw_modern|jp)$/;
+
+// `line`（C427）＝選取落在原冊層例句的哪一行（'tw'／'jp'／''）；`rememberSelection` 由 DOM 判定。
+function annDraftAnchor(entry, hostPath, inZh, quote, line) {
   const q = String(quote || '').trim();
   const hp = String(hostPath || '');
   if (!entry || !hp) return { path: '', quote: q };
   let cands;
+  let strict = 0;               // 前 strict 個候選只在「引文對得上」時才採用（不當退路）
   const mm = /^(senses\[\d+\]\.examples\[\d+\])\.modern$/.exec(hp);
-  if (mm) cands = inZh ? [mm[1] + '.zh'] : [mm[1]];
+  const mo = /^senses\[\d+\]\.examples\[\d+\]$/.exec(hp);
+  if (mm) cands = inZh ? [mm[1] + '.zh'] : [mm[1] + '.tw_modern'];
+  else if (mo && line === 'tw') cands = [hp + '.tw'];
+  else if (mo && line === 'jp') cands = [hp + '.jp'];
+  else if (mo) { cands = [hp + '.tw', hp + '.jp', hp]; strict = 2; }
   else if (hp === 'head') cands = ['head.kanji', 'head.poj'];
   else cands = [hp];
   let firstOk = '';
-  for (const c of cands) {
+  for (let ci = 0; ci < cands.length; ci++) {
+    const c = cands[ci];
     const v = annResolve(entry, c);
     if (v === undefined) continue;
-    if (typeof v === 'string') {
+    const t = typeof v === 'string' ? v : (AN_UNITS_ANCHOR.test(c) ? annAnchorText(v) : null);
+    if (t !== null) {
+      if (ci < strict) {
+        if (q && t.indexOf(q) >= 0) return { path: c, quote: q };
+        continue;
+      }
       if (!firstOk) firstOk = c;
-      if (!q || v.indexOf(q) >= 0) return { path: c, quote: q };
+      if (!q || t.indexOf(q) >= 0) return { path: c, quote: q };
       continue;
     }
     if (v && typeof v === 'object' && !Array.isArray(v) && q) {
@@ -978,19 +1039,31 @@ let LAST_SEL = null;          // 最近一次落在條目本文裡的選取（�
 let tsWidget = null;          // Turnstile widget id（render 一次、之後 reset）
 let tsToken = '';
 
+// C427（站主 M065 §二.2「選取略過注音假名與 POJ」）：`sel.toString()` 會把 ruby 盒的注音（`.ann`）、
+//   `<rt>`、上標（調號、†、別則批注的記號數字）一起帶進來——台語例句每個字上面都有注音，選三個字
+//   就拿到「khah較bōe沒tōa大」。改成複製選取範圍、拿掉這三種元素、只留本文。
+function annSelText(frag) {
+  if (!frag) return '';
+  if (frag.querySelectorAll) frag.querySelectorAll('.ann, rt, sup').forEach(x => x.remove());
+  return String(frag.textContent || '');
+}
+
 function rememberSelection() {
   try {
     const sel = window.getSelection && window.getSelection();
     if (!sel || sel.isCollapsed) return;
-    const text = String(sel.toString() || '').trim();
+    const text = (sel.rangeCount ? annSelText(sel.getRangeAt(0).cloneContents())
+                                 : String(sel.toString() || '')).trim();
     if (!text || text.length > 200) return;
     const n = sel.anchorNode;
     const el = n && (n.nodeType === 1 ? n : n.parentElement);
     const host = el && el.closest && el.closest('[data-edit]');
     const root = $('#entry');
     if (!host || !root || !root.contains(host)) return;   // 選在對話框裡等＝不覆蓋
+    const ln = el.closest('.example > .tw, .example > .jp');
     LAST_SEL = { quote: text, hostPath: host.getAttribute('data-edit') || '',
-                 inZh: !!el.closest('.zhline') };
+                 inZh: !!el.closest('.zhline'),
+                 line: ln ? (ln.classList.contains('tw') ? 'tw' : 'jp') : '' };
   } catch (e) {}
 }
 
@@ -1045,7 +1118,7 @@ function openReport(block, eid, pre) {
   $('#rnamebox').style.display = TEAM.on ? 'none' : '';    // 團隊模式暱稱欄隱藏（定案 §二 9）
   // 批注錨點：雙擊入口帶的優先，其次最近一次本文選取
   const src = (pre && pre.hostPath) ? pre : (LAST_SEL || {});
-  reportAnn = annDraftAnchor(ENTRY, src.hostPath, !!src.inZh, (pre && pre.quote) || src.quote || '');
+  reportAnn = annDraftAnchor(ENTRY, src.hostPath, !!src.inZh, (pre && pre.quote) || src.quote || '', src.line || '');
   // 修改既有批注（第 6 點）：錨點沿用該則原本的 path／quote，本文與性質預填原值
   const ed = (pre && pre.edit) || null;
   reportAnn.nid = '';
@@ -1053,17 +1126,22 @@ function openReport(block, eid, pre) {
   $('#rannpath').textContent = reportAnn.path
     ? `錨點：${reportAnn.path}`
     : (ed ? '錨點：（條目級批注，沒有錨點）' : '錨點：（未定——先選取本文的文字或雙擊該欄）');
-  $('#rannedit').textContent = ed
-    ? `修改批注 ${ed.nid}：改好本文或性質後按「送出」（快車道直接上站，站主事後追認）。` : '';
+  // C427：刪除件＝修改件同一條路（before＝nid），性質固定「刪除」、說明欄＝刪除理由（操作者裁：必填）
+  const del = !!(ed && pre && pre.del);
+  if (del) reportAnn.quote = '';
+  $('#rannedit').textContent = del
+    ? `刪除批注 ${ed.nid}：在說明欄寫刪除理由後按「送出」（下一個整點下架；站主事後可在後審表撤回）。`
+    : ed ? `修改批注 ${ed.nid}：改好本文或性質後按「送出」（快車道直接上站，站主事後追認）。` : '';
   $('#rannquote').value = reportAnn.quote;
-  $('#rannkind').innerHTML = ANNOT_KINDS_UI.map(k => `<option>${esc(k)}</option>`).join('');
-  if (ed) {
+  $('#rannkind').innerHTML = (del ? [ANNOT_KIND_DEL] : ANNOT_KINDS_UI).map(k => `<option>${esc(k)}</option>`).join('');
+  if (ed && !del) {
     $('#rannkind').value = ed.kind || ANNOT_KINDS_UI[0];
     $('#reporttext').value = ed.text || '';
   }
   let cat = (pre && pre.cat) || catForBlock(block);
   if (cat === ANNOT_CAT && !TEAM.on) cat = COMMENT_CAT;
   setReportCat(cat);
+  if (del) $('#reporttext').placeholder = '刪除理由（必填；站主後審時看得到）';
   tsRender();
   $('#reportbox').classList.add('on');
 }
@@ -1107,7 +1185,11 @@ async function sendReport(eid) {
         ? '\n（這則留言沒有通過自動驗證，站方看過之後才會出現在留言頁。）'
         : '\n下一次網站更新後會出現在「留言」頁。'));
     } else if (cat === ANNOT_CAT) {
-      alert('批注已送出：每小時工作會直接上站（通常一小時內），站主事後追認。');
+      alert(o.kind === ANNOT_KIND_DEL
+        ? '刪除件已送出：下一個整點下架（通常一小時內），站主事後可在後審表撤回。'
+        : '批注已送出：每小時工作會直接上站（通常一小時內），站主事後追認。');
+      // C427：團隊模式重新整理＝馬上看到「校對中」那一列（未上站批注只在團隊模式顯示）
+      if (TEAM.on) { $('#reportbox').classList.remove('on'); location.reload(); return; }
     } else {
       alert('已送出，感謝回報！');
     }
@@ -2604,13 +2686,194 @@ function sameVal(a, b) {
   return (typeof a === 'string' || typeof b === 'string') ? a === b : sameToken(a, b);
 }
 
+// ══ C427（站主 M065 §二.4① 准；M050 §二 14 但書）：「已有人回報（校對中）」記號 ════════════════
+// `/api/patches` 的 `reported`＝該條目團隊、queued、**沒有 op** 的列，只有 `{fid, path, block, cat}`
+//   （伺服器端 SELECT 寫死、不含任何送件文字）。全員可見；記號本身**沒有送件文字**，只告訴人
+//   「這裡已經有人報過、還在校對中」——C415 那 162 筆通報裡同欄同值重送 4 組 9 筆就是看不到這個。
+// 落點：`path` 是版面 `data-edit` 值（修正框描述模式送的就是它）＝掛在該欄（文件序第一個）；
+//   找不到或沒有 `path`＝掛在該區塊「回報錯誤」鈕後面（回報對話框送的 `block`＝四個鈕的 `data-block`；
+//   修正框送的 `block` 也是 `data-edit` 值，故兩種都試）。都找不到＝不畫（不亂掛到別處）。
+// 同一個落點多筆＝一個記號，滑鼠提示列 fid 與類別（不列人名、不列文字）。
+const REPORTED_LABEL = '已有人回報（校對中）';
+function reportedGroups(rows) {
+  const out = [];
+  const byKey = new Map();
+  for (const r of rows || []) {
+    if (!r || r.fid == null) continue;
+    const path = String(r.path || '');
+    const block = String(r.block || '');
+    if (!path && !block) continue;
+    const key = path + '\u0001' + block;
+    let g = byKey.get(key);
+    if (!g) { g = { path, block, fids: [], cats: [] }; byKey.set(key, g); out.push(g); }
+    g.fids.push(r.fid);
+    const c = String(r.cat || '');
+    if (c && g.cats.indexOf(c) < 0) g.cats.push(c);
+  }
+  return out;
+}
+function reportedBadge(g) {
+  const b = document.createElement('span');
+  b.className = 'patch reported';
+  b.textContent = REPORTED_LABEL;
+  b.title = `已有人回報、校對中（fid ${g.fids.join('、')}${g.cats.length ? '｜' + g.cats.join('、') : ''}）`
+          + '；送件內容在站方處理中，處理完記號自動消失';
+  return b;
+}
+function attrSel(name, v) {
+  return `[${name}="${String(v).replace(/["\\]/g, '\\$&')}"]`;
+}
+function paintReported(rows) {
+  const root = $('#entry');
+  if (!root) return 0;
+  let n = 0;
+  for (const g of reportedGroups(rows)) {
+    let host = null;
+    try {
+      if (g.path) host = root.querySelector(attrSel('data-edit', g.path));
+      if (!host && g.block) host = root.querySelector('.reportbtn' + attrSel('data-block', g.block))
+                                 || root.querySelector(attrSel('data-edit', g.block));
+    } catch (e) { host = null; }
+    if (!host) { console.warn('「已有人回報」記號找不到落點、不畫', g.fids.join(','), g.path || g.block); continue; }
+    const b = reportedBadge(g);
+    if (host.classList.contains('reportbtn')) host.insertAdjacentElement('afterend', b);
+    else host.appendChild(b);
+    n += 1;
+  }
+  return n;
+}
+
+// ══ C427（站主 M065 §二.3②；M050 §二 14 但書）：未上站批注**只在團隊模式**顯示全文 ═════════════
+// `/api/patches` 帶團隊鑰匙（`Authorization: Bearer`）才多回 `annots`＝該條目團隊、queued、`cat=批注`
+//   的列（`{fid, path, quote, fixkind, note, before, reporter}`）；不帶鑰匙＝伺服器根本不回這個鍵。
+// 畫法：新增那種＝批注卡尾多一列「校對中」、**不編正式序號**；修改既有一則＝在那則掛「校對中」並顯示
+//   修改後內容（原文放提示）；刪除既有一則＝在那則掛「校對中：刪除」。
+// 撤回＝自己送的、還在排隊的那一筆，送一筆**取消件**（`fixkind=取消`、`before`＝fid），快車道略過該 fid、
+//   兩筆都結案（不新開團隊可用的 status PATCH 端點＝站主原句）。取消件本身與被取消那筆都不畫。
+function pendingAnnotView(rows, me) {
+  const list = (rows || []).filter(r => r && r.fid != null);
+  const cancelled = new Set();
+  for (const r of list) {
+    if (String(r.fixkind || '') === ANNOT_KIND_CANCEL && /^\d+$/.test(String(r.before || '').trim())) {
+      cancelled.add(+String(r.before).trim());
+    }
+  }
+  const out = { adds: [], edits: {}, hides: {} };
+  for (const r of list) {
+    const k = String(r.fixkind || '');
+    if (k === ANNOT_KIND_CANCEL || cancelled.has(+r.fid)) continue;
+    const v = { fid: +r.fid, kind: k, text: String(r.note || ''), path: String(r.path || ''),
+                quote: String(r.quote || ''), nid: String(r.before || '').trim(),
+                mine: !!me && r.reporter === me };
+    if (v.nid && ANNOT_NID_RE.test(v.nid)) {
+      (k === ANNOT_KIND_DEL ? out.hides : out.edits)[v.nid] = v;   // 同一則多筆＝最後一筆（fid 遞增）
+    } else if (!v.nid) {
+      out.adds.push(v);
+    }
+  }
+  return out;
+}
+function pendingBadge(v, label) {
+  const b = document.createElement('span');
+  b.className = 'patch queued';
+  b.textContent = label;
+  b.title = `fid ${v.fid}；還沒上站（下一個整點由快車道處理），只有團隊模式看得到`;
+  if (v.mine) {
+    const w = document.createElement('a');
+    w.className = 'patchundo';
+    w.href = '#';
+    w.textContent = '撤回';
+    w.addEventListener('click', ev => {                // 兩段式確認（同 patchBadge；不用 confirm()）
+      ev.preventDefault();
+      if (w.dataset.armed === 'busy') return;
+      if (w.dataset.armed === '1') { cancelAnnot(v, w); return; }
+      w.dataset.armed = '1';
+      w.textContent = '再按一次確定撤回';
+      setTimeout(() => { if (w.dataset.armed === '1') { w.dataset.armed = ''; w.textContent = '撤回'; } }, 4000);
+    });
+    b.appendChild(w);
+  }
+  return b;
+}
+function ensureAnnotList() {
+  let ul = document.querySelector('#entry section.annots ul.anlist');
+  if (ul) return ul;
+  const before = document.querySelector('#entry [data-blockname="原冊數位化"]');
+  if (!before) return null;
+  const sec = document.createElement('section');
+  sec.className = 'card annots';
+  sec.setAttribute('data-blockname', '批注');
+  sec.innerHTML = '<details open><summary>做工á人批注<span class="ancnt">0</span></summary><ul class="anlist"></ul></details>';
+  before.parentNode.insertBefore(sec, before);
+  return sec.querySelector('ul.anlist');
+}
+function paintPendingAnnots(rows) {
+  if (!TEAM.on) return 0;
+  const v = pendingAnnotView(rows, TEAM.name);
+  let n = 0;
+  for (const [nid, x] of Object.entries(v.edits).concat(Object.entries(v.hides))) {
+    const li = document.getElementById(nid);
+    if (!li) continue;
+    li.classList.add('pending');
+    if (v.hides[nid] === x) {
+      li.classList.add('pendel');
+      li.appendChild(pendingBadge(x, '校對中：刪除'));
+    } else {
+      const t = li.querySelector('.antext');
+      if (t) { t.title = '上站中的原文：' + t.textContent; t.textContent = x.text; }
+      const k = li.querySelector('.ankind');
+      if (k && x.kind) k.textContent = x.kind;
+      li.appendChild(pendingBadge(x, '校對中：修改'));
+    }
+    n += 1;
+  }
+  if (v.adds.length) {
+    const ul = ensureAnnotList();
+    for (const x of v.adds) {
+      if (!ul) break;
+      const li = document.createElement('li');
+      li.className = 'anitem pending';
+      li.innerHTML = `<span class="anback off" title="還沒上站、不編序號">·</span>`
+        + `<span class="ankind">${esc(x.kind)}</span><span class="antext">${esc(x.text)}</span>`;
+      if (x.path) li.title = '錨點：' + x.path + (x.quote ? `（${x.quote}）` : '');
+      li.appendChild(pendingBadge(x, '校對中'));
+      ul.appendChild(li);
+      n += 1;
+    }
+  }
+  return n;
+}
+async function cancelAnnot(v, link) {
+  if (!TEAM.on) return;
+  if (link) { link.textContent = '撤回中…'; link.dataset.armed = 'busy'; }
+  const rec = { source: 'website', ts: new Date().toISOString(), id: entryId, block: '批注',
+                cat: ANNOT_CAT, fixkind: ANNOT_KIND_CANCEL, before: String(v.fid),
+                note: `取消批注件 fid ${v.fid}`, token: TEAM.token };
+  try {
+    const r = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
+      body: JSON.stringify(rec),
+    });
+    const j = r.ok ? await r.json() : null;
+    if (!j || !j.ok) throw new Error('bad');
+    if (link) link.textContent = '已撤回，重新整理中…';
+    location.reload();
+  } catch (e) {
+    if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
+  }
+}
+
 async function loadPatches() {
   let list = [];
   try {
-    const r = await fetch('/api/patches?id=' + encodeURIComponent(entryId), { cache: 'no-store' });
+    const r = await fetch('/api/patches?id=' + encodeURIComponent(entryId),
+                          { cache: 'no-store', headers: teamAuth() });
     if (!r.ok) return;
     const j = await r.json();
     list = (j && j.ok && j.patches) || [];
+    if (j && j.ok) paintReported(j.reported || []);
+    if (j && j.ok && Array.isArray(j.annots)) paintPendingAnnots(j.annots);   // C427：團隊模式才有這個鍵
   } catch (e) { return; }
   const rows = [];
   for (const row of list) {
@@ -2754,7 +3017,7 @@ async function init() {
       ev.preventDefault();                       // 「加注」在 <summary> 裡：不要順便收合批注卡
       if (ab.classList.contains('anadd')) { openReport('批注', e.id, { cat: ANNOT_CAT }); return; }
       const a = (e.annots || []).find(x => x.nid === ab.dataset.nid);
-      if (a) openReport('批注', e.id, { cat: ANNOT_CAT, edit: a });
+      if (a) openReport('批注', e.id, { cat: ANNOT_CAT, edit: a, del: ab.classList.contains('andel') });
       return;
     }
     const rb = ev.target.closest('.reportbtn');
@@ -2800,6 +3063,7 @@ async function init() {
         hostPath: host ? host.getAttribute('data-edit') : '',
         inZh: !!(editTarget.closest && editTarget.closest('.zhline')),
         quote: inSel ? LAST_SEL.quote : '',
+        line: inSel ? (LAST_SEL.line || '') : '',
       });
     });
   }
