@@ -2072,7 +2072,9 @@ function sepOldOf(src, i) {
 // ⚠ `DIAL_MEMBERS` 必須與 `export_site_data.DIAL_WHITELIST` 成員相同、`DIAL_MANUAL_NONE`／`DIAL_SEP` 必須與同名常數相等
 //   （那一份＋`dial_value` 是驗證器用的單一真相；本表只是瀏覽器端的前置篩與選單）；由 `test_dial_multi_manual.py` 機械對版。
 //   陣列序＝選單鈕的排列序，不是值的順序（值的順序＝校對者照原冊依序點選）。
-const DIAL_MEMBERS = ['漳', '泉', '同', '同安', '同安音', '廈', '廈門', '潮'];
+//   U251（站主 M069_X5 §二）：地域註六值入白名單（白名單語義＝「腔口與地域」），接在腔名之後。
+const DIAL_MEMBERS = ['漳', '泉', '同', '同安', '同安音', '廈', '廈門', '潮',
+  '臺北地方', '中部地方', '臺南地方', '臺中地方', '北部', '中南部'];
 const DIAL_MANUAL_NONE = '無';
 const DIAL_SEP = '、';
 function dialOldOf(src) {
