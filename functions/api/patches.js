@@ -28,10 +28,39 @@
 //   ⚠ 這一句出錯只讓 `reported` 退空陣列，**不拖垮**上面那句疊加層（兩件事各自獨立）。
 //   只收 `queued`：`applied` 是快車道已套、等發布的（有 op 才會被套），無 op 列不會停在 applied；
 //     裁完的件由丁場回寫交辦檔改 status，記號自然消失。
+// ── C438（U246 ②；站主 M069_X4 §三.2「取消件擴到修正件」）：已有取消件排隊的列＝本端點**不再回**
+//   取消件＝團隊、queued、`fixkind=取消`、`before`＝被取消那筆 fid（純數字）；每小時工作受理後兩筆轉
+//   reverted／superseded，這裡是那一小時之間的空窗——撤回一按，疊加層、記號、中譯提議當場就收（全員皆同）。
+//   ⚠ 取消件自己也不得出現在任何一句（它沒有 op、cat 可能是原冊改錯字＝會被 REPORTED_SQL 當成「已有人回報」）。
+//   `NOT_CANCELLED`＝接在各句 WHERE 後的同一段（綁值多一個 id）；只看同條目（取消件受理條件之一＝同條目）。
+export const NOT_CANCELLED = " AND fid NOT IN (SELECT CAST(before AS INTEGER) FROM feedback"
+  + " WHERE id = ? AND role = 'team' AND status = 'queued' AND fixkind = '取消')";
+export const NOT_CANCEL_ROW = " AND COALESCE(fixkind,'') <> '取消'";
+
 export const REPORTED_SQL = 'SELECT fid,path,block,cat FROM feedback'
   + " WHERE id = ? AND role = 'team' AND status = 'queued'"
   + " AND (op IS NULL OR op = '')"
   + " AND COALESCE(cat,'') NOT IN ('批注','留言')"
+  + NOT_CANCEL_ROW + NOT_CANCELLED
+  + ' ORDER BY fid LIMIT 200';
+
+export const PATCHES_SQL = 'SELECT fid,id,path,op,status,reporter,received FROM feedback'
+  + " WHERE id = ? AND role = 'team' AND status IN ('queued','applied')"
+  + " AND op IS NOT NULL AND op <> ''"
+  + NOT_CANCELLED
+  + ' ORDER BY fid LIMIT 200';
+
+//
+// ── C438（U246 ④；站主 M069_X4 §三.4）：`trans`＝中譯提議與翻譯意見（**只在帶有效團隊鑰匙時**回）──
+//   該條目 queued、沒有 op 的翻譯類列：`cat=翻譯意見`，或 C332 之前的舊列（`cat` 空／NULL 且 `block=現代化對照`；
+//   這批舊列 `role` 是 NULL＝送件當時還沒有鑰匙制，故**不篩 role**）。積壓約 405 筆（站主口徑）同一通道顯示。
+//   回的欄＝畫面要用的：path（現代卡中譯行＝`senses[i].zh`／`…examples[j].zh`；舊列多半空）、before／after
+//   （提議＝舊值全文／新值全文）、note、reporter、received（「意見 月-日」）、role（自己的團隊列才給撤回）。
+//   不帶鑰匙＝回應**根本沒有 `trans` 鍵**（同 `annots`）。這一句出錯＝`trans` 退空陣列、其餘照回。
+export const TEAM_TRANS_SQL = 'SELECT fid,path,block,before,after,note,reporter,received,role FROM feedback'
+  + " WHERE id = ? AND COALESCE(status,'queued') = 'queued' AND (op IS NULL OR op = '')"
+  + " AND (cat = '翻譯意見' OR (COALESCE(cat,'') = '' AND block = '現代化對照'))"
+  + NOT_CANCEL_ROW + NOT_CANCELLED
   + ' ORDER BY fid LIMIT 200';
 
 //
@@ -58,15 +87,10 @@ export async function onRequestGet({ request, env }) {
     const url = new URL(request.url);
     const id = String(url.searchParams.get('id') || '').slice(0, 40);
     if (!id) return json({ ok: false, err: 'no-id' }, 400, NO_STORE);
-    const rs = await env.DB.prepare(
-      'SELECT fid,id,path,op,status,reporter,received FROM feedback'
-      + " WHERE id = ? AND role = 'team' AND status IN ('queued','applied')"
-      + " AND op IS NOT NULL AND op <> ''"
-      + ' ORDER BY fid LIMIT 200'
-    ).bind(id).all();
+    const rs = await env.DB.prepare(PATCHES_SQL).bind(id, id).all();
     let reported = [];
     try {
-      const r2 = await env.DB.prepare(REPORTED_SQL).bind(id).all();
+      const r2 = await env.DB.prepare(REPORTED_SQL).bind(id, id).all();
       reported = r2.results || [];
     } catch (e) {
       reported = [];
@@ -78,6 +102,12 @@ export async function onRequestGet({ request, env }) {
         body.annots = r3.results || [];
       } catch (e) {
         body.annots = [];
+      }
+      try {                                   // C438（U246 ④）：中譯提議＋翻譯意見（團隊模式限定）
+        const r4 = await env.DB.prepare(TEAM_TRANS_SQL).bind(id, id).all();
+        body.trans = r4.results || [];
+      } catch (e) {
+        body.trans = [];
       }
     }
     return json(body, 200, NO_STORE);

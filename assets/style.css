@@ -521,6 +521,16 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .patch.reported { background: transparent; color: #6b4b2d; border: 1px dashed #c9b27a; cursor: help; }
 .patchundo { margin-left: 5px; color: inherit; text-decoration: underline; cursor: pointer; }
 .patched { background: #fdf6df; border-radius: 3px; }
+/* C438（U246 ③④）：送出後原地回饋；中譯提議／翻譯意見（團隊模式限定，現值後面接淺灰一段） */
+.src.sentok { color: #2f6b3a; font-weight: 600; }
+.src.sentok:empty { display: none; }
+.zhprops { color: #8a8580; font-size: 0.92em; }
+.zhprop { margin-left: 4px; }
+.zhprop.opinion { font-style: italic; }
+.zhprop.stale { text-decoration: underline dotted #c9b27a; }
+.zhops { display: block; margin: 4px 0 8px; padding: 4px 8px; border-left: 3px solid #e2ddd4; }
+.zhops > div { margin: 2px 0; }
+#edzhtext { width: 100%; min-height: 4.5em; }
 
 /* 團隊登入（頁尾）。一般讀者看得到這顆鈕但用不到——不隱藏，隱藏了站主與 blues 找不到。 */
 .teamlogin { display: inline-block; margin-left: 10px; white-space: nowrap; }

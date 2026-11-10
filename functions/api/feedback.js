@@ -119,6 +119,40 @@ export function isMissingColumnErr(e) {
   return /no such column|has no column named/i.test(m) && /turnstile/i.test(m);
 }
 
+// ── C438（U246 ③；站主 M069_X4 §三.3）：送出去重 ─────────────────────────────────────────
+//   病灶（站主逐筆翻快車道帳）：團隊有 op 送件 533 筆裡同人同條目同 op 重複 25 對，2 秒內 5 對（63 ms／100 ms／
+//   140 ms＝送出鈕雙觸發）。前端已鎖鈕，這裡是第二道：**團隊列**同暱稱、同條目、同內容在 DEDUP_WINDOW_SEC
+//   秒內已有一列（任何 status）＝不入列，回原列的 fid（`dup: true`）＝前端照樣顯示「已送出，編號 N」。
+//   「同內容」：有 op＝比 op（站主原話「同 op」）；無 op（翻譯意見、取消件、描述型）＝比 cat／fixkind／path／
+//   before／after／note 全欄（無 op 列沒有更窄的身分）。
+//   ⚠ 只比 `received`（伺服器時鐘，見檔頭）；查詢本身出錯＝照常入列（寧可多一列也不吞送件）。
+//   ⚠ 公眾列不去重：暱稱可自填、不是身分。
+export const DEDUP_WINDOW_SEC = 10;
+export const DEDUP_SQL_OP = 'SELECT fid FROM feedback'
+  + " WHERE role = 'team' AND reporter = ? AND id = ? AND op = ?"
+  + " AND received >= datetime('now', ?) ORDER BY fid DESC LIMIT 1";
+export const DEDUP_SQL_TEXT = 'SELECT fid FROM feedback'
+  + " WHERE role = 'team' AND reporter = ? AND id = ? AND (op IS NULL OR op = '')"
+  + " AND COALESCE(cat,'') = ? AND COALESCE(fixkind,'') = ? AND COALESCE(path,'') = ?"
+  + " AND COALESCE(before,'') = ? AND COALESCE(after,'') = ? AND COALESCE(note,'') = ?"
+  + " AND received >= datetime('now', ?) ORDER BY fid DESC LIMIT 1";
+
+// → 已存在那列的 fid，或 0（不是重複／查不動）。**永不丟例外**。
+export async function findDuplicate(db, rec) {
+  try {
+    const win = `-${DEDUP_WINDOW_SEC} seconds`;
+    const st = rec.op
+      ? db.prepare(DEDUP_SQL_OP).bind(rec.reporter, rec.id, rec.op, win)
+      : db.prepare(DEDUP_SQL_TEXT).bind(rec.reporter, rec.id, rec.cat, rec.fixkind, rec.path,
+                                        rec.before, rec.after, rec.note, win);
+    const rs = await st.all();
+    const row = rs && rs.results && rs.results[0];
+    return (row && Number.isInteger(row.fid) && row.fid > 0) ? row.fid : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 export function json(obj, status = 200, headers = {}) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -159,6 +193,13 @@ export async function onRequestPost({ request, env }) {
     // 沒有文字」那一型＝雙擊編輯器產出的樣子），不會多拒收任何原本收得下的列。
     if (!rec.id || (!rec.note && !rec.after && !rec.op)) {
       return json({ ok: false, err: 'empty' }, 400);
+    }
+    // C438（U246 ③）：團隊列數秒內同內容重送＝不入列、回原列 fid（見 DEDUP_SQL_* 註）
+    if (team) {
+      const dupFid = await findDuplicate(env.DB, rec);
+      if (dupFid) {
+        return json({ ok: true, role: rec.role, reporter: rec.reporter, fid: dupFid, turnstile: 'team', dup: true });
+      }
     }
     // C332：團隊鑰匙免驗（定案 §二 9）；空檢查之後才驗＝被 400 擋下的列不必打一次 siteverify。
     rec.turnstile = team ? 'team'

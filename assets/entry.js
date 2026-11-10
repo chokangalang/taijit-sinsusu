@@ -1142,6 +1142,7 @@ function openReport(block, eid, pre) {
   if (cat === ANNOT_CAT && !TEAM.on) cat = COMMENT_CAT;
   setReportCat(cat);
   if (del) $('#reporttext').placeholder = '刪除理由（必填；站主後審時看得到）';
+  resetSendUi($('#reportsend'), $('#reportcancel'), $('#reportsent'));   // C438
   tsRender();
   $('#reportbox').classList.add('on');
 }
@@ -1165,9 +1166,12 @@ async function sendReport(eid) {
     team: TEAM.on, token: TEAM.token, cfToken: tsToken,
   };
   const why = reportEmptyWhy(o);
-  if (why) { alert(why); return; }
+  if (why) { $('#rcathint').textContent = why; return; }     // C438：不用 alert，原地寫
   if (!TEAM.on) { try { localStorage.setItem('tjss_reporter', o.reporter); } catch (e) {} }
   const rec = buildReportRec(o);
+  const btn = $('#reportsend'), cancelBtn = $('#reportcancel');
+  if (btn && btn.disabled) return;                          // C438：送出中／已送出＝不再送
+  lockSend(btn, cancelBtn, true);
   let j = null;
   try {
     const r = await fetch('/api/feedback', {
@@ -1178,27 +1182,39 @@ async function sendReport(eid) {
     j = r.ok ? await r.json() : null;
   } catch (e) { j = null; }
   if (j && j.ok === true) {
-    if (cat === COMMENT_CAT) {
-      // 未通過自動驗證的留言照收，但留言頁只在站方看過後才出（export `comment_visible`）
-      const unverified = j.turnstile && j.turnstile !== 'ok' && j.turnstile !== 'team';
-      alert('已送出，感謝留言！' + (unverified
-        ? '\n（這則留言沒有通過自動驗證，站方看過之後才會出現在留言頁。）'
-        : '\n下一次網站更新後會出現在「留言」頁。'));
-    } else if (cat === ANNOT_CAT) {
-      alert(o.kind === ANNOT_KIND_DEL
-        ? '刪除件已送出：下一個整點下架（通常一小時內），站主事後可在後審表撤回。'
-        : '批注已送出：每小時工作會直接上站（通常一小時內），站主事後追認。');
-      // C427：團隊模式重新整理＝馬上看到「校對中」那一列（未上站批注只在團隊模式顯示）
-      if (TEAM.on) { $('#reportbox').classList.remove('on'); location.reload(); return; }
-    } else {
-      alert('已送出，感謝回報！');
+    // C438（U246 ③）：框不自動關、原地改字「已送出，編號 N」；不用 alert（站主原話）
+    markSent(btn, cancelBtn);
+    tsToken = '';
+    $('#reportsent').textContent = reportSentText(j, cat, o.kind);
+    if (cat === ANNOT_CAT && TEAM.on) {
+      // C427：團隊模式馬上看到「校對中」那一列（未上站批注只在團隊模式顯示）——C438 改重畫、不整頁重新整理
+      try { await rerender(); } catch (e) { $('#reportsent').textContent += '（畫面重畫失敗，請重新整理頁面。）'; }
     }
-  } else {
-    await fallbackCopy(reportCtx + '\n類別：' + cat + '\n回報者：' + o.reporter + '\n說明：' + o.note
-      + (o.after ? '\n原文→應為：' + o.before + ' → ' + o.after : ''));
+    return;
   }
+  lockSend(btn, cancelBtn, false);
+  await fallbackCopy(reportCtx + '\n類別：' + cat + '\n回報者：' + o.reporter + '\n說明：' + o.note
+    + (o.after ? '\n原文→應為：' + o.before + ' → ' + o.after : ''));
   tsToken = '';
   $('#reportbox').classList.remove('on');
+}
+
+// C438：回報對話框送出成功的原地訊息（純函式；test_u246_submit 在 node 實跑）
+function reportSentText(j, cat, kind) {
+  const fid = (j && j.fid) ? j.fid : '?';
+  let tail;
+  if (cat === COMMENT_CAT) {
+    // 未通過自動驗證的留言照收，但留言頁只在站方看過後才出（export `comment_visible`）
+    const unverified = j && j.turnstile && j.turnstile !== 'ok' && j.turnstile !== 'team';
+    tail = unverified ? '這則留言沒有通過自動驗證，站方看過之後才會出現在留言頁。'
+                      : '下一次網站更新後會出現在「留言」頁。';
+  } else if (cat === ANNOT_CAT) {
+    tail = kind === ANNOT_KIND_DEL ? '刪除件：下一個整點下架（通常一小時內），站主事後可在後審表撤回。'
+                                   : '批注：每小時工作會直接上站（通常一小時內），站主事後追認。';
+  } else {
+    tail = '感謝回報！';
+  }
+  return `已送出，編號 ${fid}。${tail}` + ((j && j.dup) ? '（剛才已送出過同一筆，這次沒有重複入列。）' : '');
 }
 
 // ══ C324：團隊模式的編輯器（定案 §四 場 2 之 3）════════════════════════════
@@ -2215,7 +2231,7 @@ function describeSlot(el) {
 const SYMS = ['□', 'ーー', '〳〵', '〴〵', '、', '。', '・', '「', '」'];
 
 function showPane(mode) {
-  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdial', 'editdesc', 'editwhole']) {
+  for (const id of ['editsyl', 'editleaf', 'editsep', 'editdial', 'editdesc', 'editwhole', 'editzh']) {
     const el = $('#' + id);
     if (el) el.classList.toggle('on', id === 'edit' + mode);
   }
@@ -2248,6 +2264,12 @@ function openEdit(el) {
   }
   if (pend) s.old = pend.op.new;
   s.ours = (s.mode === 'desc') && isOursSlot(el, s);
+  if (s.ours) {
+    // C438（U246 ④）：現代卡中譯行＝預填現值全文的整句編輯框（其餘「本站加的」格照舊描述模式）
+    const z = zhSlotOf(el);
+    if (z) Object.assign(s, { mode: 'zh', path: z.path, old: z.old });
+  }
+  resetSendUi($('#editsend'), $('#editcancel'), $('#editsent'));
   $('#editbox').classList.toggle('zhslot', s.ours);
   $('#editctx').textContent = s.path
     ? `條目 ${entryId}／槽位 ${s.path}`
@@ -2286,6 +2308,8 @@ function openEdit(el) {
   } else if (s.mode === 'dial') {
     s.newDial = s.old;
     dialRender();
+  } else if (s.mode === 'zh') {
+    $('#edzhtext').value = s.old;              // C438：預填現值全文，直接改成要的整句
   } else {
     // 退描述模式並提示為什麼（定案 §四 場 2 之 3）
     $('#editwhy').textContent = s.why
@@ -2296,7 +2320,7 @@ function openEdit(el) {
   showPane(s.mode);
   $('#editbox').classList.add('on');
   const first = { syl: '#edkana', leaf: '#editnew', sep: '#edsepbtns', dial: '#eddialbtns', desc: '#editdesctext',
-                  whole: '#edwtext' }[s.mode];
+                  whole: '#edwtext', zh: '#edzhtext' }[s.mode];
   const f = $(first);
   if (f && f.focus) f.focus();
 }
@@ -2420,9 +2444,75 @@ function editNoteOf(mode, desc, extra) {
   return d ? `${d}\n備註：${x}` : `備註：${x}`;
 }
 
+// ── C438（U246 ③；站主 M069_X4 §三.3）：送出鈕鎖定＋送出後原地回饋 ─────────────────────────
+//   ・送出中鈕鎖住（病灶＝63／100／140 ms 雙觸發三對）；成功後鈕維持鎖、改字「已送出」，框**不自動關**；
+//     「取消」改「關閉」。後端另有一道 10 秒去重（`feedback.js DEDUP_SQL_*`），回 `dup` 時照實說。
+//   ・訊息原地寫在框內，**不用 alert**（站主原話）；送不出去才寫送不出去。
+const SENT_KIND_TAIL = {
+  fix: '正式上站＝下一個整點（通常一小時內）。',
+  print: '印錯件：下一個整點以校改模式上站（原印面記在 orig），站方事後追認。',
+  trans: '翻譯意見：由審核者裁決，不會自動改到網站上；裁決前你可以撤回或重送整句。',
+  desc: '由審核者判讀後處理。',
+};
+function sentText(j, kind) {
+  const fid = (j && j.fid) ? j.fid : '?';
+  return `已送出，編號 ${fid}，校對中。` + (SENT_KIND_TAIL[kind] || '')
+    + ((j && j.dup) ? '（剛才已送出過同一筆，這次沒有重複入列。）' : '');
+}
+function lockSend(btn, cancelBtn, busy) {
+  if (btn) { btn.disabled = !!busy; btn.textContent = busy ? '送出中…' : '送出'; }
+  if (cancelBtn) cancelBtn.disabled = !!busy;
+}
+function markSent(btn, cancelBtn) {
+  if (btn) { btn.disabled = true; btn.textContent = '已送出'; }
+  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '關閉'; }
+}
+function resetSendUi(btn, cancelBtn, sentEl) {
+  if (btn) { btn.disabled = false; btn.textContent = '送出'; }
+  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '取消'; }
+  if (sentEl) sentEl.textContent = '';
+}
+
+// ── C438（U246 ④；站主 M069_X4 §三.4）：中譯行＝整句提議 ──────────────────────────────────
+//   射程＝現代卡中譯行對應譯檔一格：義項中譯 `senses[i].zh`（`span.zh`）與例句中譯 `…examples[j].zh`
+//   （現代化例句欄 `…examples[j].modern` 裡的 `.zhline`）。註／參照的中譯與原冊日文層不在內（照舊描述模式）。
+//   → {path, old}（old＝站上現值全文）或 null。
+const ZH_SENSE_RE = /^senses\[\d+\]\.zh$/;
+const ZH_EX_MODERN_RE = /^(senses\[\d+\]\.examples\[\d+\])\.modern$/;
+const ZH_PATH_RE = /^senses\[\d+\](\.examples\[\d+\])?\.zh$/;
+function zhSlotOf(el) {
+  const h = el && el.closest ? el.closest('[data-edit]') : null;
+  if (!h) return null;
+  const ed = h.getAttribute('data-edit') || '';
+  let p = '';
+  if (ZH_SENSE_RE.test(ed)) p = ed;
+  else {
+    const m = ZH_EX_MODERN_RE.exec(ed);
+    if (m && el.closest('.zhline')) p = m[1] + '.zh';
+  }
+  if (!p) return null;
+  const v = annResolve(ENTRY, p);
+  return (typeof v === 'string' && v) ? { path: p, old: v } : null;
+}
+// 中譯提議的送件列（純函式；test_u246_submit 在 node 實跑）：路徑＋舊值全文＋新值全文、無 op、cat=翻譯意見
+function zhProposalRec(o) {
+  return { source: 'website', ts: o.ts, id: o.eid, block: o.block || o.path, path: o.path,
+           before: o.old, after: o.now, note: o.note || '', cat: '翻譯意見', fixkind: '', token: o.token };
+}
+function zhProposalErr(old, now) {
+  if (!now) return '中譯不得為空（要刪整句請用說明寫明，改走描述）。';
+  if (now === old) return '沒有改到東西。';
+  if (/[\r\n]/.test(now)) return '中譯是一行，不得含換行。';
+  if (now.length > 600) return '中譯過長（>600 字元）。';
+  return '';
+}
+
 async function submitEdit() {
   if (!editSlot || !TEAM.on) return;
   const s = editSlot;
+  const btn = $('#editsend');
+  if (btn && btn.disabled) return;                 // C438：送出中／已送出＝不再送
+  if (s.mode === 'zh') return submitZh(s, btn);
   const fixEl = $('#editfix').querySelector('input[name=edfix]:checked');
   if (!fixEl && !s.ours) { $('#edithint').textContent = '請先選「數位化打錯」或「原書印面本身有誤」。'; return; }
   const fixkind = s.ours ? '' : fixEl.value;
@@ -2460,28 +2550,46 @@ async function submitEdit() {
     token: TEAM.token,
   };
   if (op) rec.op = JSON.stringify(op);
+  const kind = s.ours ? 'trans' : !op ? 'desc' : (fixkind === '原書印面本身有誤' ? 'print' : 'fix');
+  await postAndReport(rec, kind, btn);
+}
 
+// C438：中譯整句提議送出（路徑＋舊值全文＋新值全文；不走快車道、不帶 op）
+async function submitZh(s, btn) {
+  const now = String($('#edzhtext').value || '').trim();
+  const why = zhProposalErr(s.old, now);
+  if (why) { $('#edithint').textContent = why; return; }
+  const rec = zhProposalRec({ ts: new Date().toISOString(), eid: entryId, block: s.editPath, path: s.path,
+                              old: s.old, now, note: String($('#editnote').value || '').trim(), token: TEAM.token });
+  await postAndReport(rec, 'trans', btn);
+}
+
+// C438：送出＋原地回饋＋重畫（三段各自報錯：送不出去／已送出但重畫失敗）
+async function postAndReport(rec, kind, btn) {
+  const cancelBtn = $('#editcancel');
+  lockSend(btn, cancelBtn, true);
+  $('#edithint').textContent = '';
+  let j = null;
   try {
     const r = await fetch('/api/feedback', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
       body: JSON.stringify(rec),
     });
-    const j = r.ok ? await r.json() : null;
-    if (!j || !j.ok) throw new Error('bad');
-    $('#editbox').classList.remove('on');
-    if (editTarget) editTarget.classList.add('edited');
-    if (op) {
-      // 送出即見（定案 §二 14）：不必等下一次整點，也不必重新整理
-      paintPatch({ fid: j.fid, op, status: 'queued', reporter: j.reporter }, true);
-    }
-    // 中譯／POJ 欄（第 1 點）＝翻譯意見，不走快車道 ⇒ 不能講「下一次整點發布」
-    if (s.ours) { alert('已送出（翻譯意見）：由站主判讀後處理，不會自動改到網站上。'); return; }
-    alert(SENT_HINT);
-    // C326：同一格可能已有排隊中的修正 ⇒ 重新整理，讓疊加層以淨結果重畫（一格一個標記）
-    if (op) location.reload();
-  } catch (err) {
+    j = r.ok ? await r.json() : null;
+  } catch (err) { j = null; }
+  if (!j || !j.ok) {
+    lockSend(btn, cancelBtn, false);
     $('#edithint').textContent = '送不出去（網路或伺服器問題），請稍後再試。內容還在，不會不見。';
+    return;
+  }
+  markSent(btn, cancelBtn);
+  const sent = $('#editsent');
+  if (sent) sent.textContent = sentText(j, kind);
+  try {
+    await rerender();                          // 送出即見：重抓待校清單、該槽以淨結果重畫（一格一個標記）
+  } catch (err) {
+    if (sent) sent.textContent += '（畫面重畫失敗，請重新整理頁面看「校對中」。）';
   }
 }
 
@@ -2859,11 +2967,12 @@ async function cancelAnnot(v, link) {
     });
     const j = r.ok ? await r.json() : null;
     if (!j || !j.ok) throw new Error('bad');
-    if (link) link.textContent = '已撤回，重新整理中…';
-    location.reload();
   } catch (e) {
     if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
+    return;
   }
+  if (link) link.textContent = '已撤回（下一個整點結案）';
+  try { await rerender(); } catch (e) { if (link) link.textContent = '已撤回；請重新整理頁面'; }  // C438：不整頁重新整理
 }
 
 async function loadPatches() {
@@ -2876,6 +2985,7 @@ async function loadPatches() {
     list = (j && j.ok && j.patches) || [];
     if (j && j.ok) paintReported(j.reported || []);
     if (j && j.ok && Array.isArray(j.annots)) paintPendingAnnots(j.annots);   // C427：團隊模式才有這個鍵
+    if (j && j.ok && Array.isArray(j.trans)) paintTrans(j.trans);             // C438：同上（中譯提議／翻譯意見）
   } catch (e) { return; }
   const rows = [];
   for (const row of list) {
@@ -2895,33 +3005,123 @@ async function loadPatches() {
 // C338：確認改在頁內做（`patchBadge` 的兩段式按鈕），**不用 `confirm()`**——瀏覽器的對話框
 //   會被靜默擋掉而回 false（app 內嵌瀏覽器窗格、或使用者勾過「不要讓此頁再顯示對話框」），
 //   撤回就一按沒反應、也不告訴人為什麼（C338 操作者本機實測回報；窗格內 confirm() 1ms 回 false）。
-async function withdraw(p, link) {
+// C438（U246 ②；站主 M069_X4 §三.2「取消件擴到修正件」）：撤回**改送取消件**（同 C427 批注的形狀：
+//   `fixkind=取消`、`before`＝被取消那筆 fid），不再送反向 op。理由（站主逐筆翻的 7 筆）：反向 op 是另一筆
+//   修正件——兩筆都會落地、帳上多兩列 rid、後審表多兩列；取消件受理＝兩筆都不落地、`reverted`／`superseded`。
+//   淨結果合了多筆（`p.fids`）＝每一筆各送一張取消件。`/api/patches` 對「已有取消件排隊」的列當場不再回
+//   （`NOT_CANCELLED`）＝重畫後就看不到它，不必等整點。只對自己送的、還 queued 的開放（`p.mine` 照舊）。
+function cancelRec(fid, cat, path) {
+  return { source: 'website', ts: new Date().toISOString(), id: entryId, block: path || cat,
+           path: path || '', cat, fixkind: '取消', before: String(fid), note: `取消 fid ${fid}`, token: TEAM.token };
+}
+async function sendCancels(fids, cat, path, link) {
   if (!TEAM.on) return;
-  const fids = (p.fids || [p.fid]).join('、');
   if (link) { link.textContent = '撤回中…'; link.dataset.armed = 'busy'; }
-  const rec = {
-    source: 'website', ts: new Date().toISOString(), id: entryId,
-    path: p.op.path.join('.').replace(/\.(\d+)/g, '[$1]'),
-    before: typeof p.op.new === 'string' ? p.op.new : isWholeVal(p.op.new) ? p.op.new.t : tokDisp(p.op.new),
-    after: typeof p.op.old === 'string' ? p.op.old : isWholeVal(p.op.old) ? p.op.old.t : tokDisp(p.op.old),
-    note: `撤回 fid ${fids}`,
-    cat: '原冊改錯字', fixkind: '數位化打錯',
-    op: JSON.stringify({ path: p.op.path, old: p.op.new, new: p.op.old }),
-    token: TEAM.token,
-  };
   try {
-    const r = await fetch('/api/feedback', {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
-      body: JSON.stringify(rec),
-    });
-    const j = r.ok ? await r.json() : null;
-    if (!j || !j.ok) throw new Error('bad');
-    if (link) link.textContent = '已撤回，重新整理中…';
-    location.reload();
+    for (const f of fids) {
+      const r = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
+        body: JSON.stringify(cancelRec(f, cat, path)),
+      });
+      const j = r.ok ? await r.json() : null;
+      if (!j || !j.ok) throw new Error('bad');
+    }
   } catch (e) {
     if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
+    return;
   }
+  if (link) link.textContent = '已撤回（下一個整點結案）';
+  try { await rerender(); } catch (e) { if (link) link.textContent = '已撤回；請重新整理頁面'; }
+}
+async function withdraw(p, link) {
+  await sendCancels(p.fids || [p.fid], '原冊改錯字', p.op.path.join('.').replace(/\.(\d+)/g, '[$1]'), link);
+}
+
+// ══ C438（U246 ④；站主 M069_X4 §三.4）：中譯提議與翻譯意見（團隊模式限定）══════════════════════
+// `/api/patches` 帶團隊鑰匙才多回 `trans`＝該條目 queued、無 op 的翻譯類列（含 C332 前沒有 role 的舊列）。
+// 畫法：現值照畫，後面接淺灰一段——
+//   ・提議（after 非空）＝「（校對者名：改完的整句）」；送件時的舊值已和現值不同＝加 `stale` 標、提示寫明。
+//   ・意見（after 空；積壓約 405 筆多是這型）＝「（名・意見 月-日：說明）」，不當替換句畫。
+//   ・掛在對應的中譯行（`senses[i].zh`／`…examples[j].zh`）；沒有路徑或找不到該行＝列在「POJ＋日文中譯」卡頭下。
+//   ・自己送的（團隊列、暱稱相同）掛「撤回」＝送取消件。
+// 結構（給 U250 留位）：每一筆一個 `.zhprop[data-fid]`，收在 `.zhprops` 容器裡；U250 的「AI 複核」「裁定」
+//   兩段要接在同一筆 `.zhprop` 裡面（`.zhai`／`.zhverdict` 子元素），不另開區塊。
+function zhHostEls(path) {
+  const root = $('#entry');
+  if (!root) return [];
+  if (ZH_SENSE_RE.test(path)) return Array.from(root.querySelectorAll(`[data-edit="${path}"]`));
+  const m = /^(senses\[\d+\]\.examples\[\d+\])\.zh$/.exec(path);
+  if (m) return Array.from(root.querySelectorAll(`[data-edit="${m[1]}.modern"] .zhline`));
+  return [];
+}
+function transText(x) {
+  const who = x.reporter || '（未署名）';
+  if (x.after) return `（${who}：${x.after}）`;
+  const md = String(x.received || '').slice(5, 10);
+  return `（${who}・意見${md ? ' ' + md : ''}：${String(x.note || '').trim()}）`;
+}
+function transStale(x) {
+  if (!x.after || !x.before || !ZH_PATH_RE.test(x.path || '')) return false;
+  const cur = annResolve(ENTRY, x.path);
+  return typeof cur === 'string' && cur !== x.before;
+}
+function zhPropEl(x) {
+  const s = document.createElement('span');
+  s.className = 'zhprop' + (x.after ? '' : ' opinion') + (transStale(x) ? ' stale' : '');
+  s.dataset.fid = String(x.fid);
+  s.textContent = transText(x);
+  s.title = `fid ${x.fid}｜${x.after ? '中譯提議（審核者裁決前不改站上值）' : '翻譯意見'}`
+    + (transStale(x) ? '｜⚠ 送件時的舊值已和現值不同（譯文後來改過）' : '');
+  if (TEAM.on && x.role === 'team' && x.reporter && x.reporter === TEAM.name) {
+    const w = document.createElement('a');
+    w.className = 'patchundo';
+    w.href = '#';
+    w.textContent = '撤回';
+    w.addEventListener('click', ev => {
+      ev.preventDefault();
+      if (w.dataset.armed === 'busy') return;
+      if (w.dataset.armed === '1') { sendCancels([x.fid], '翻譯意見', x.path || '', w); return; }
+      w.dataset.armed = '1';
+      w.textContent = '再按一次確定撤回';
+      setTimeout(() => { if (w.dataset.armed === '1') { w.dataset.armed = ''; w.textContent = '撤回'; } }, 4000);
+    });
+    s.appendChild(w);
+  }
+  return s;
+}
+function paintTrans(rows) {
+  const root = $('#entry');
+  if (!root) return 0;
+  const loose = [];
+  let n = 0;
+  for (const x of rows || []) {
+    if (!x || !x.fid) continue;
+    const els = ZH_PATH_RE.test(x.path || '') ? zhHostEls(x.path) : [];
+    if (!els.length) { loose.push(x); continue; }
+    let box = els[0].querySelector('.zhprops');
+    if (!box) { box = document.createElement('span'); box.className = 'zhprops'; els[0].appendChild(box); }
+    box.appendChild(zhPropEl(x));
+    n += 1;
+  }
+  const card = root.querySelector('[data-blockname="現代化對照"]');
+  if (loose.length && card) {
+    const box = document.createElement('div');
+    box.className = 'zhprops zhops';
+    const h = document.createElement('div');
+    h.className = 'src';
+    h.textContent = `翻譯意見（未對到中譯行的 ${loose.length} 筆；團隊模式才看得到）`;
+    box.appendChild(h);
+    for (const x of loose) {
+      const d = document.createElement('div');
+      d.appendChild(zhPropEl(x));
+      box.appendChild(d);
+      n += 1;
+    }
+    const h2 = card.querySelector('h2');
+    if (h2 && h2.nextSibling) card.insertBefore(box, h2.nextSibling); else card.appendChild(box);
+  }
+  return n;
 }
 
 // C335（U124）：團隊模式下互見連結 `a.reflink` 的單擊**延後跳頁**，讓雙擊有機會開修正框。
@@ -2960,6 +3160,35 @@ function cancelRefNavOnPress(ev) {
   refNavTimer = null;
 }
 
+// ── 條目本體 HTML（init 與送出後重畫共用）──────────────────
+// 2026-07-17 版面改版：獨立表頭卡取消——表頭融入第一卡，
+// 整體＝POJ＋日文中譯（含表頭條）→ 原冊數位化（含原冊表頭）→ 原冊書影
+function entryHTML(e) {
+  let html;
+  if (e.status === 'skeleton') {
+    html = skeletonCard(e) + blockImages(e);   // 骨架：表頭＋建置中說明單卡＋該條原冊書影（B 版）
+  } else {
+    // M050 場 1（§二 6）：批注卡夾在「POJ＋日文中譯」與「原冊數位化」之間
+    html = `<div class="twocol">${blockModern(e)}${blockAnnots(e)}${blockOriginal(e)}</div>` +
+           blockImages(e);
+  }
+  return html + `<div class="footnav">${navHTML(e)}</div>`;
+}
+
+// C438（U246 ③；站主 M069_X4 §三.3「送出後重抓待校清單並重畫該槽」）：送出／撤回成功後**不整頁重新整理**，
+//   改成條目本體依已載入的資料重畫一次、再重抓 `/api/patches` 疊回待校層。
+//   原寫法＝`location.reload()`，而站主實測團隊模式送 `head.dial` 後畫面沒變、按 F5 才出現（回函附圖）；
+//   重畫成功與否和「送出成功」分開報（重畫失敗不得說成送不出去＝那會誘發重送）。
+//   事件監聽都掛在 `#entry` 根元素上（init 一次），根元素不換、只換內容＝監聽不必重掛。
+async function rerender() {
+  const root = $('#entry');
+  if (!root || !ENTRY) return;
+  root.innerHTML = entryHTML(ENTRY);
+  placeMarkers(ENTRY, root);
+  PATCHES = [];
+  await loadPatches();
+}
+
 // ── 初始化 ──────────────────────────────────────────────
 async function init() {
   const id = new URLSearchParams(location.search).get('id') || '';
@@ -2987,18 +3216,7 @@ async function init() {
   document.title = isBlankKanji(e.head.kanji)
     ? `${e.head.poj}・台日新辭書線上版`
     : `${tmix ? tmix.map(x => x.t).join(' ') : e.head.kanji}（${e.head.poj}）・台日新辭書線上版`;
-  // 2026-07-17 版面改版：獨立表頭卡取消——表頭融入第一卡，
-  // 整體＝POJ＋日文中譯（含表頭條）→ 原冊數位化（含原冊表頭）→ 原冊書影
-  let html;
-  if (e.status === 'skeleton') {
-    html = skeletonCard(e) + blockImages(e);   // 骨架：表頭＋建置中說明單卡＋該條原冊書影（B 版）
-  } else {
-    // M050 場 1（§二 6）：批注卡夾在「POJ＋日文中譯」與「原冊數位化」之間
-    html = `<div class="twocol">${blockModern(e)}${blockAnnots(e)}${blockOriginal(e)}</div>` +
-           blockImages(e);
-  }
-  html += `<div class="footnav">${navHTML(e)}</div>`;
-  root.innerHTML = html;
+  root.innerHTML = entryHTML(e);
   placeMarkers(e, root);                 // M050 場 1：批注記號須在 DOM 存在之後才放
   await loadPatches();                   // C324：疊加層（定案 §二 14）——對所有人可見，含 queued
 

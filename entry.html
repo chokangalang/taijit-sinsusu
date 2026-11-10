@@ -46,6 +46,8 @@
     </div>
     <textarea id="reporttext" placeholder="請描述問題（哪個字、哪個注音／翻譯有誤，正確應為…）"></textarea>
     <p class="src warn" id="rcathint"></p>
+    <!-- C438（U246 ③）：送出成功＝原地寫「已送出，編號 N」、框不自動關（不用 alert） -->
+    <p class="src sentok" id="reportsent"></p>
     <div id="rnamebox">
       <label class="src">暱稱（選填，將會顯示在公開的修訂記錄與留言頁中）</label>
       <input id="reportname" type="text" maxlength="60" placeholder="例：阿明">
@@ -200,6 +202,12 @@
       <textarea id="editdesctext"></textarea>
     </div>
 
+    <!-- C438（U246 ④）：現代卡中譯行＝整句提議（預填現值全文；送出「路徑＋舊值全文＋新值全文」） -->
+    <div id="editzh" class="edpane">
+      <label class="src">中譯（框裡是站上現值全文，直接改成你要的整句；審核者裁決前不會改到網站上）</label>
+      <textarea id="edzhtext"></textarea>
+    </div>
+
     <p class="src" id="editzhnote">這一欄是本站加的（POJ／中譯），不是原書內容，不必選「數位化打錯／原書印面有誤」；送出後歸「翻譯意見」。</p>
     <fieldset id="editfix">
       <legend class="src">這一筆是哪一種（必選）</legend>
@@ -210,6 +218,7 @@
     <label class="src">備註（判讀依據、頁面位置等）</label>
     <textarea id="editnote" placeholder="例：原冊 15x 放大可見鼻音圈"></textarea>
     <p class="src warn" id="edithint"></p>
+    <p class="src sentok" id="editsent"></p>
     <div class="actions">
       <button id="editannot" type="button" title="不是改值、是要加一則編者按：轉成批注草稿（錨點＝這一欄）">改寫批注草稿</button>
       <button id="editcancel">取消</button>
