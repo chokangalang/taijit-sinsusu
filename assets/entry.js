@@ -2561,7 +2561,9 @@ async function submitZh(s, btn) {
   if (why) { $('#edithint').textContent = why; return; }
   const rec = zhProposalRec({ ts: new Date().toISOString(), eid: entryId, block: s.editPath, path: s.path,
                               old: s.old, now, note: String($('#editnote').value || '').trim(), token: TEAM.token });
-  await postAndReport(rec, 'trans', btn);
+  const sent = await postAndReport(rec, 'trans', btn);
+  // C441（U250「修改重送」）：新件送成功才撤舊件（舊件送取消件＝兩筆不會同時掛著）；新件沒送出＝舊件不動
+  if (sent && s.replaceFid) await sendCancels([s.replaceFid], '翻譯意見', s.path || '', null);
 }
 
 // C438：送出＋原地回饋＋重畫（三段各自報錯：送不出去／已送出但重畫失敗）
@@ -2581,7 +2583,7 @@ async function postAndReport(rec, kind, btn) {
   if (!j || !j.ok) {
     lockSend(btn, cancelBtn, false);
     $('#edithint').textContent = '送不出去（網路或伺服器問題），請稍後再試。內容還在，不會不見。';
-    return;
+    return false;
   }
   markSent(btn, cancelBtn);
   const sent = $('#editsent');
@@ -2591,6 +2593,7 @@ async function postAndReport(rec, kind, btn) {
   } catch (err) {
     if (sent) sent.textContent += '（畫面重畫失敗，請重新整理頁面看「校對中」。）';
   }
+  return true;                                 // C441：呼叫端（修改重送）據此才撤舊件
 }
 
 // ══ C324：疊加層（定案 §二 14）══════════════════════════════════════════════
@@ -3045,8 +3048,8 @@ async function withdraw(p, link) {
 //   ・意見（after 空；積壓約 405 筆多是這型）＝「（名・意見 月-日：說明）」，不當替換句畫。
 //   ・掛在對應的中譯行（`senses[i].zh`／`…examples[j].zh`）；沒有路徑或找不到該行＝列在「POJ＋日文中譯」卡頭下。
 //   ・自己送的（團隊列、暱稱相同）掛「撤回」＝送取消件。
-// 結構（給 U250 留位）：每一筆一個 `.zhprop[data-fid]`，收在 `.zhprops` 容器裡；U250 的「AI 複核」「裁定」
-//   兩段要接在同一筆 `.zhprop` 裡面（`.zhai`／`.zhverdict` 子元素），不另開區塊。
+// 結構：每一筆一個 `.zhprop[data-fid]`，收在 `.zhprops` 容器裡；C441（U250）的「AI 複核」「裁定」
+//   兩段接在同一筆 `.zhprop` 裡面（`.zhai`／`.zhverdict` 子元素），不另開區塊（見下方 `zhPropEl`）。
 function zhHostEls(path) {
   const root = $('#entry');
   if (!root) return [];
@@ -3066,14 +3069,99 @@ function transStale(x) {
   const cur = annResolve(ENTRY, x.path);
   return typeof cur === 'string' && cur !== x.before;
 }
+// ══ C441（U250；站主 M069_X4 §四之二.1–.3）：同一筆 `.zhprop` 裡接「AI 複核」「裁定」兩行 ══════════════
+//   ・AI 複核（`.zhai`）＝出卡時 AI 給的意見：明標 AI、寫「複核意見」不寫「裁定」、供參考。
+//   ・裁定（`.zhverdict`）三型：准／不准／改裁。不准、改裁一定帶原因；改裁＝原提議畫刪除線（`.struck`），
+//     下接「改為『最終值』＋理由」。資料＝`verdict_note`（JSON；產生端 `review_live/status_writeback.py`）。
+//   ・保留期（以裁定日計時；`transPhase`）：准＝提議行於上線消、「准・已上線」留 3 天；不准／改裁＝14 天全顯、
+//     之後摺成小記號（提示仍含原因與最終值）、再 30 天消；AI 複核行隨裁定收。
+//   ・裁定行出現前：自己送的掛「修改」（整句框預填自己的原提議；送出新件後對舊件送取消件）與「撤回」。
+const VERDICT_KEEP = { '准': 3, '不准': 14, '改裁': 14 };
+const VERDICT_FOLD = 30;
+function verdictOf(x) {
+  if (!x || !x.verdict_note || !/^(published|rejected|superseded)$/.test(String(x.status || ''))) return null;
+  let d = null;
+  try { d = JSON.parse(x.verdict_note); } catch (e) { return null; }
+  if (!d || !VERDICT_KEEP[d.v] || !/^\d{4}-\d{2}-\d{2}$/.test(String(d.at || ''))) return null;
+  return d;
+}
+function dayDiff(a, b) {                 // 'YYYY-MM-DD' 兩日相差天數（b − a；UTC 曆日、不受時區影響）
+  const p = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? Date.UTC(+m[1], m[2] - 1, +m[3]) : NaN; };
+  return Math.round((p(b) - p(a)) / 86400000);
+}
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// → {show: 'full'|'fold'|'hide', v, why, final, online}（純函式；test_u250_display 在 node 實跑）
+//   cur＝站上該格現值（可省略＝不判上線）。
+function transPhase(x, today, cur) {
+  const d = verdictOf(x);
+  if (!d) return { show: 'full', v: null };
+  const age = dayDiff(d.at, today);
+  const base = { v: d.v, why: String(d.why || ''), final: String(d.final || ''), at: d.at, age };
+  if (d.v === '准') {
+    const online = !!x.after && typeof cur === 'string' && cur === x.after;
+    return Object.assign(base, { show: age > VERDICT_KEEP['准'] ? 'hide' : 'full', online });
+  }
+  if (age > VERDICT_KEEP[d.v] + VERDICT_FOLD) return Object.assign(base, { show: 'hide' });
+  return Object.assign(base, { show: age > VERDICT_KEEP[d.v] ? 'fold' : 'full' });
+}
+function verdictText(ph) {
+  if (ph.v === '准') return `（裁定：准・${ph.online ? '已上線' : '待上線'}${ph.why ? '——' + ph.why : ''}）`;
+  if (ph.v === '不准') return `（裁定：不准——${ph.why}）`;
+  return `（裁定：改為「${ph.final}」——${ph.why}）`;
+}
+function aiText(x) {
+  return `（AI 複核意見・供參考：${String(x.ai_note || '').trim()}）`;
+}
 function zhPropEl(x) {
+  const cur = ZH_PATH_RE.test(x.path || '') ? annResolve(ENTRY, x.path) : undefined;
+  const ph = transPhase(x, todayISO(), cur);
+  if (ph.show === 'hide') return null;
   const s = document.createElement('span');
-  s.className = 'zhprop' + (x.after ? '' : ' opinion') + (transStale(x) ? ' stale' : '');
+  const stale = !ph.v && transStale(x);    // C441：已裁定的件（准＝已套上）不再提示「舊值已和現值不同」
+  s.className = 'zhprop' + (x.after ? '' : ' opinion') + (stale ? ' stale' : '');
   s.dataset.fid = String(x.fid);
-  s.textContent = transText(x);
+  if (ph.show === 'fold') {
+    // 摺疊：只留小記號，提示仍含原因與最終值（站主 §四之二.3）
+    s.className += ' zhfold';
+    s.textContent = `〔${ph.v}〕`;
+    s.title = `fid ${x.fid}｜${transText(x)}｜${verdictText(ph)}｜裁定日 ${ph.at}`;
+    return s;
+  }
+  if (!(ph.v === '准' && ph.online)) {      // 准且已上線＝提議行消、只留裁定行
+    const t = document.createElement('span');
+    t.className = 'zhpropt' + (ph.v === '改裁' ? ' struck' : '');
+    t.textContent = transText(x);
+    s.appendChild(t);
+  }
   s.title = `fid ${x.fid}｜${x.after ? '中譯提議（審核者裁決前不改站上值）' : '翻譯意見'}`
-    + (transStale(x) ? '｜⚠ 送件時的舊值已和現值不同（譯文後來改過）' : '');
+    + (stale ? '｜⚠ 送件時的舊值已和現值不同（譯文後來改過）' : '');
+  if (x.ai_note && String(x.ai_note).trim()) {
+    const a = document.createElement('span');
+    a.className = 'zhai';
+    a.textContent = aiText(x);
+    a.title = 'AI 出卡時給的複核意見，不是裁定；裁定以審核者那一行為準';
+    s.appendChild(a);
+  }
+  if (ph.v) {
+    const v = document.createElement('span');
+    v.className = 'zhverdict v-' + { '准': 'ok', '不准': 'no', '改裁': 'alt' }[ph.v];
+    v.textContent = verdictText(ph);
+    v.title = `審核者裁定（${ph.at}）`;
+    s.appendChild(v);
+    return s;                               // 已裁定＝不再給修改／撤回
+  }
   if (TEAM.on && x.role === 'team' && x.reporter && x.reporter === TEAM.name) {
+    if (x.after && ZH_PATH_RE.test(x.path || '')) {
+      const r = document.createElement('a');
+      r.className = 'patchundo zhrevise';
+      r.href = '#';
+      r.textContent = '修改';
+      r.addEventListener('click', ev => { ev.preventDefault(); reviseZh(x); });
+      s.appendChild(r);
+    }
     const w = document.createElement('a');
     w.className = 'patchundo';
     w.href = '#';
@@ -3090,6 +3178,18 @@ function zhPropEl(x) {
   }
   return s;
 }
+// C441：修改重送＝開同一格的整句框、預填自己的原提議與說明；送出成功後對舊件送取消件（`submitZh`）
+function reviseZh(x) {
+  const els = zhHostEls(x.path || '');
+  if (!els.length || !TEAM.on) return false;
+  openEdit(els[0]);
+  if (!editSlot || editSlot.mode !== 'zh' || editSlot.path !== x.path) return false;
+  editSlot.replaceFid = x.fid;
+  $('#edzhtext').value = String(x.after || '');
+  $('#editnote').value = String(x.note || '');
+  $('#edithint').textContent = `修改 fid ${x.fid}：送出後舊的那筆會自動撤回。`;
+  return true;
+}
 function paintTrans(rows) {
   const root = $('#entry');
   if (!root) return 0;
@@ -3100,21 +3200,24 @@ function paintTrans(rows) {
     const els = ZH_PATH_RE.test(x.path || '') ? zhHostEls(x.path) : [];
     if (!els.length) { loose.push(x); continue; }
     let box = els[0].querySelector('.zhprops');
+    const el = zhPropEl(x);
+    if (!el) continue;                       // C441：裁定保留期已過
     if (!box) { box = document.createElement('span'); box.className = 'zhprops'; els[0].appendChild(box); }
-    box.appendChild(zhPropEl(x));
+    box.appendChild(el);
     n += 1;
   }
   const card = root.querySelector('[data-blockname="現代化對照"]');
-  if (loose.length && card) {
+  const looseEls = loose.map(zhPropEl).filter(Boolean);     // C441：裁定保留期已過者不列、不計數
+  if (looseEls.length && card) {
     const box = document.createElement('div');
     box.className = 'zhprops zhops';
     const h = document.createElement('div');
     h.className = 'src';
-    h.textContent = `翻譯意見（未對到中譯行的 ${loose.length} 筆；團隊模式才看得到）`;
+    h.textContent = `翻譯意見（未對到中譯行的 ${looseEls.length} 筆；團隊模式才看得到）`;
     box.appendChild(h);
-    for (const x of loose) {
+    for (const el of looseEls) {
       const d = document.createElement('div');
-      d.appendChild(zhPropEl(x));
+      d.appendChild(el);
       box.appendChild(d);
       n += 1;
     }

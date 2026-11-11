@@ -64,6 +64,25 @@ export const TEAM_TRANS_SQL = 'SELECT fid,path,block,before,after,note,reporter,
   + ' ORDER BY fid LIMIT 200';
 
 //
+// ── C441（U250；站主 M069_X4 §四之二.1–.3）：灰字區三段式＝提議／AI 複核／裁定 ──
+//   同一批翻譯類列，多回三欄 `status`、`ai_note`、`verdict_note`（D1 第 18、19 欄），並多收**已裁定**的列：
+//   `status` ∈ published／rejected／superseded **且帶 `verdict_note`**（＝裁定工具寫的；撤回、重複件、積壓回寫的
+//   superseded／rejected 沒有它＝照舊不回），裁定日（`verdict_note.at`）在 44 天內（不准／改裁 14 天全顯＋30 天摺成
+//   小記號；准 3 天由前端判）。過期與摺疊的分界由前端 `transPhase` 算，這裡只收最長的那一窗。
+//   ⚠ 兩欄還沒加（操作者 ALTER 未跑）＝這一句「no such column」⇒ 退回上面 U246 那句（`TEAM_TRANS_SQL`），
+//     團隊模式照舊看得到提議與意見、只是沒有 AI／裁定兩行——不得因 ALTER 還沒跑就讓灰字區整個消失。
+export const VERDICT_WINDOW_DAYS = 44;
+export const TEAM_TRANS_SQL_U250 = 'SELECT fid,path,block,before,after,note,reporter,received,role,'
+  + 'status,ai_note,verdict_note FROM feedback'
+  + " WHERE id = ? AND (op IS NULL OR op = '')"
+  + " AND (cat = '翻譯意見' OR (COALESCE(cat,'') = '' AND block = '現代化對照'))"
+  + " AND (COALESCE(status,'queued') = 'queued'"
+  + "   OR (status IN ('published','rejected','superseded') AND verdict_note IS NOT NULL"
+  + "       AND json_extract(verdict_note, '$.at') >= date('now', '-" + VERDICT_WINDOW_DAYS + " days')))"
+  + NOT_CANCEL_ROW + NOT_CANCELLED
+  + ' ORDER BY fid LIMIT 200';
+
+//
 // ── C427（站主 M065 §二.3②；M050 §二 14 但書「批注類未上站只限團隊模式顯示」）：`annots` ──
 //   **只在請求帶有效團隊鑰匙（`Authorization: Bearer`）時**多回該條目團隊、queued、`cat=批注` 的列
 //   ＝前端團隊模式把未上站批注畫成「校對中」。不帶鑰匙／鑰匙無效＝回應**根本沒有 `annots` 鍵**
@@ -103,11 +122,16 @@ export async function onRequestGet({ request, env }) {
       } catch (e) {
         body.annots = [];
       }
-      try {                                   // C438（U246 ④）：中譯提議＋翻譯意見（團隊模式限定）
-        const r4 = await env.DB.prepare(TEAM_TRANS_SQL).bind(id, id).all();
-        body.trans = r4.results || [];
-      } catch (e) {
-        body.trans = [];
+      // C438（U246 ④）：中譯提議＋翻譯意見（團隊模式限定）；C441（U250）：先試三段式那句，出錯退回 U246 那句
+      body.trans = [];
+      for (const sql of [TEAM_TRANS_SQL_U250, TEAM_TRANS_SQL]) {
+        try {
+          const r4 = await env.DB.prepare(sql).bind(id, id).all();
+          body.trans = r4.results || [];
+          break;
+        } catch (e) {
+          body.trans = [];
+        }
       }
     }
     return json(body, 200, NO_STORE);

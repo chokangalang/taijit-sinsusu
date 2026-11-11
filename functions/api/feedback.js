@@ -12,6 +12,7 @@
 //   憑證走 `Authorization: Bearer` 標頭或 body 的 `token` 欄，**不走 query string**
 //   ——寫入型端點的憑證落進 URL 會一併落進存取紀錄。
 //   `status` 只收定案 §三 那五個值，其餘一律 400（fail-closed）。
+//   C441 起每筆可多帶 `ai_note`／`verdict_note`（見 `planPatch` 上方註解）。
 // GET ?token=&since=：管理者增量拉取（JSONL；token 比對 env.ADMIN_TOKEN）
 // 綁定需求：D1 binding 變數名 DB＋Secret ADMIN_TOKEN 與 TEAM_TOKENS（Pages 專案 Settings）
 // 2026-08-05 多把制：ADMIN_TOKEN 值＝逗號分隔的 token 清單（一人一把；
@@ -230,6 +231,55 @@ export async function onRequestPost({ request, env }) {
   }
 }
 
+// ── C441（U250；站主 M069_X4 §四之二.2）：PATCH 每筆可多帶 `ai_note`／`verdict_note` ──
+//   D1 第 18、19 欄（操作者在主控台 `ALTER TABLE feedback ADD COLUMN ai_note TEXT`／`… verdict_note TEXT`）。
+//   · `ai_note`＝出卡時的 AI 複核意見；`verdict_note`＝裁定 JSON 文字（`{"v":"准|不准|改裁","why","final"?,"at"}`，
+//     產生端＝`review_live/status_writeback.py` `verdict_note()`；這裡只驗「是 JSON 物件、v 在三型內」）。
+//   · 只帶註記不帶 `status`＝只寫註記（AI 複核意見在裁定**之前**就要上：校對者看到它還能修改重送）。
+//   · 兩鍵都是**有帶才寫**（不帶＝不動該欄；不會被清成 NULL）。
+//   · 欄還沒加時退回只寫 status（上方 try／catch）——不得因 ALTER 還沒跑就讓整個 PATCH 壞掉（C332 前例）。
+export const NOTE_KEYS = ['ai_note', 'verdict_note'];
+export const NOTE_MAX = 2000;
+export const VERDICT_V = ['准', '不准', '改裁'];
+
+export function isMissingNoteColumnErr(e) {
+  const m = String((e && (e.message || e.cause && e.cause.message)) || e || '');
+  return /no such column|has no column named/i.test(m) && /ai_note|verdict_note/i.test(m);
+}
+
+// items → { status: [[st, fid]…], notes: [[sql, vals]…] } 或 { err }。純函式（測試直接呼）。
+export function planPatch(items) {
+  const status = [];
+  const notes = [];
+  for (const it of items) {
+    const fid = parseInt(it && it.fid, 10);
+    if (!Number.isInteger(fid) || fid <= 0) return { err: 'bad-fid' };
+    const hasSt = it && it.status != null && it.status !== '';
+    const sets = [];
+    const vals = [];
+    for (const k of NOTE_KEYS) {
+      if (!it || it[k] == null) continue;
+      const v = String(it[k]).trim();
+      if (!v || v.length > NOTE_MAX) return { err: 'bad-note' };
+      if (k === 'verdict_note') {
+        let d;
+        try { d = JSON.parse(v); } catch (e) { return { err: 'bad-note' }; }
+        if (!d || typeof d !== 'object' || !VERDICT_V.includes(d.v)) return { err: 'bad-note' };
+      }
+      sets.push(k + ' = ?');
+      vals.push(v);
+    }
+    if (!hasSt && !sets.length) return { err: 'bad-status' };
+    if (hasSt) {
+      const st = String(it.status);
+      if (!STATUS_VALUES.includes(st)) return { err: 'bad-status' };
+      status.push([st, fid]);
+    }
+    if (sets.length) notes.push(['UPDATE feedback SET ' + sets.join(', ') + ' WHERE fid = ?', vals.concat([fid])]);
+  }
+  return { status, notes };
+}
+
 export async function onRequestPatch({ request, env }) {
   try {
     if (!env.DB) return json({ ok: false, err: 'no-binding' }, 500);
@@ -246,18 +296,26 @@ export async function onRequestPatch({ request, env }) {
       : (b.fid == null ? [] : [{ fid: b.fid, status: b.status }]);
     if (!items.length) return json({ ok: false, err: 'empty' }, 400);
     if (items.length > 500) return json({ ok: false, err: 'too-many' }, 413);
+    const plan = planPatch(items);
+    if (plan.err) return json({ ok: false, err: plan.err }, 400);
     const stmt = env.DB.prepare('UPDATE feedback SET status = ? WHERE fid = ?');
-    const binds = [];
-    for (const it of items) {
-      const fid = parseInt(it && it.fid, 10);
-      const st = String((it && it.status) || '');
-      if (!Number.isInteger(fid) || fid <= 0) return json({ ok: false, err: 'bad-fid' }, 400);
-      if (!STATUS_VALUES.includes(st)) return json({ ok: false, err: 'bad-status' }, 400);
-      binds.push(stmt.bind(st, fid));
-    }
+    const binds = plan.status.map(([st, fid]) => stmt.bind(st, fid));
+    const noteBinds = plan.notes.map(([sql, vals]) => env.DB.prepare(sql).bind(...vals));
     // 一批一次送（D1 batch＝同一交易）；每小時工作一輪會回寫一串 fid。
-    await env.DB.batch(binds);
-    return json({ ok: true, n: binds.length });
+    if (!noteBinds.length) {
+      await env.DB.batch(binds);
+      return json({ ok: true, n: binds.length });
+    }
+    try {
+      await env.DB.batch(binds.concat(noteBinds));
+      return json({ ok: true, n: binds.length, notes: 'ok', nn: noteBinds.length });
+    } catch (e) {
+      // C441：兩欄還沒加（操作者的 ALTER 尚未跑）＝退回只寫 status，回 `notes:'missing-column'`；
+      //   呼叫端（每小時工作）據此把帶註記的交辦列留 done=false、加欄後下一輪補送。整批交易已回滾，重送 status 那一半。
+      if (!isMissingNoteColumnErr(e)) throw e;
+      if (binds.length) await env.DB.batch(binds);
+      return json({ ok: true, n: binds.length, notes: 'missing-column' });
+    }
   } catch (e) {
     return json({ ok: false, err: 'server' }, 500);
   }
