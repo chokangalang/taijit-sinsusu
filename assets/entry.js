@@ -461,7 +461,7 @@ function refUnitsModernHTML(units) {
   // 連續 tw-POJ □ 之間於底字尾插連字號（aⁿ-aⁿ），真漢字底字不動。
   const arr = units || [];
   const isBP = u => u.u === '\u25a1' && u.r && u.r.poj != null && (u.r.lang === 'tw' || u.r.lang == null);
-  return arr.map((u, i) => {
+  const parts = arr.map((u, i) => {
     if (isBP(u) && i + 1 < arr.length && isBP(arr[i + 1])) {
       const r = u.r;
       const rt = esc(r.poj) + (r.star ? '*' : '');
@@ -471,7 +471,20 @@ function refUnitsModernHTML(units) {
       return annBox(cls, attr, base, rt);
     }
     return rubyModern(u);
-  }).join('');
+  });
+  // U237\uff08C457\uff1b\u7ad9\u4e3b M069_X2 \u88c1\uff09\uff1a\u53c3\u7167\u69fd\u591a\u76ee\u6a19\u9010\u6bb5\u9023\u7d50\u2014\u2014\u76f8\u9130\u540c `u.ref` \u4e4b\u55ae\u4f4d\u4f75\u6210\u55ae\u4e00 <a>\uff08\u540c unitsHTML\uff09\u3002
+  //   \u6709\u6574\u69fd r.target \u7684\u69fd export \u4e0d\u639b\u55ae\u4f4d ref\uff1d\u4e0d\u6703\u5de2\u72c0\u9023\u7d50\u3002\u7121 ref \u4e4b\u69fd\u8f38\u51fa\u8207\u6539\u524d\u9010\u5b57\u76f8\u540c\u3002
+  let out = '';
+  for (let i = 0; i < arr.length;) {
+    const ref = arr[i].ref;
+    if (!ref) { out += parts[i]; i += 1; continue; }
+    let inner = '';
+    let j = i;
+    while (j < arr.length && arr[j].ref === ref) { inner += parts[j]; j += 1; }
+    out += `<a class="reflink" href="entry.html?id=${encodeURIComponent(ref)}" title="\u524d\u5f80\u53c3\u7167\u689d\u76ee">${inner}</a>`;
+    i = j;
+  }
+  return out;
 }
 
 function refLineInner(r, ri, modern, headDial) {
