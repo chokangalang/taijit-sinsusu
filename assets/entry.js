@@ -1486,7 +1486,11 @@ function wholeValue(m) {
   const a = [];
   for (const it of m.items) {
     if (it.b) {
-      r.push(clone(it.el));
+      // U258（C453）：v2 注音可帶起點欄 `at`；位置一律由 `a` 帶，從舊值複製來的 `at` 不送
+      //   （驗證器同樣剝掉、套用端只在照順序會掛錯的條重寫 `at`）。
+      const el = clone(it.el);
+      delete el.at;
+      r.push(el);
       a.push(pos);
       t += it.el.c;
       pos += cpLen(it.el.c);
@@ -1591,7 +1595,11 @@ function wholeBuild(path, old, m) {
   if (m.items.some(x => x.b && x.fresh && !String(x.el.k || ''))) {
     return { err: '新加的詞塊要有注音（雙擊該詞塊輸入）。' };
   }
-  if (nv.t === old.t && JSON.stringify(nv.r) === JSON.stringify(old.r)) return { err: '沒有改到東西。' };
+  // U258（C453）：起點也比——只把注音搬到另一個相同的字（文字、注音都沒變）也是一筆修改；
+  //   舊值的 `at` 不算內容（新值不帶），比對前剝掉。
+  const oldR = (old.r || []).map(e => { const x = clone(e); delete x.at; return x; });
+  if (nv.t === old.t && JSON.stringify(nv.r) === JSON.stringify(oldR)
+      && JSON.stringify(nv.a) === JSON.stringify(old.a)) return { err: '沒有改到東西。' };
   return { op: { path: pathToArr(path), old, new: nv } };
 }
 
@@ -2566,6 +2574,21 @@ async function submitZh(s, btn) {
   if (sent && s.replaceFid) await sendCancels([s.replaceFid], '翻譯意見', s.path || '', null);
 }
 
+// C451（U256；站主 M071 §二）：送不出去要說原因。後端 500 現在回 `detail`＝例外文字；
+//   D1 免費額度用完（Cloudflare 原文含 "daily row read limit"／"daily row write limit"）＝改說人話。
+//   回應不是 JSON（網路斷、Cloudflare 錯誤頁）＝j 為 null ⇒ 退回「網路或伺服器問題」。
+const D1_QUOTA_RE = /daily row (read|write) limit/i;
+function isQuotaFail(j) { return !!(j && D1_QUOTA_RE.test(String(j.detail || ''))); }
+function failReason(j) { return (j && (j.detail || j.err)) || '網路或伺服器問題'; }
+function sendFailText(j) {
+  if (isQuotaFail(j)) return '今日回報資料庫免費額度用完，台北時間 08:00 後再送。內容還在，不會不見。';
+  return `送不出去（原因：${failReason(j)}），請稍後再試。內容還在，不會不見。`;
+}
+function cancelFailText(j) {
+  if (isQuotaFail(j)) return '撤回送不出去（原因：今日回報資料庫免費額度用完），台北時間 08:00 後再試';
+  return `撤回送不出去（原因：${failReason(j)}），請稍後再試`;
+}
+
 // C438：送出＋原地回饋＋重畫（三段各自報錯：送不出去／已送出但重畫失敗）
 async function postAndReport(rec, kind, btn) {
   const cancelBtn = $('#editcancel');
@@ -2578,11 +2601,11 @@ async function postAndReport(rec, kind, btn) {
       headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
       body: JSON.stringify(rec),
     });
-    j = r.ok ? await r.json() : null;
+    j = await r.json().catch(() => null);      // C451：500 也讀 body（detail）；不再依 r.ok 丟掉
   } catch (err) { j = null; }
   if (!j || !j.ok) {
     lockSend(btn, cancelBtn, false);
-    $('#edithint').textContent = '送不出去（網路或伺服器問題），請稍後再試。內容還在，不會不見。';
+    $('#edithint').textContent = sendFailText(j);
     return false;
   }
   markSent(btn, cancelBtn);
@@ -2962,16 +2985,17 @@ async function cancelAnnot(v, link) {
   const rec = { source: 'website', ts: new Date().toISOString(), id: entryId, block: '批注',
                 cat: ANNOT_CAT, fixkind: ANNOT_KIND_CANCEL, before: String(v.fid),
                 note: `取消批注件 fid ${v.fid}`, token: TEAM.token };
+  let j = null;
   try {
     const r = await fetch('/api/feedback', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
       body: JSON.stringify(rec),
     });
-    const j = r.ok ? await r.json() : null;
+    j = await r.json().catch(() => null);      // C451（U256）：500 也讀 body 取原因
     if (!j || !j.ok) throw new Error('bad');
   } catch (e) {
-    if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
+    if (link) { link.textContent = cancelFailText(j); link.dataset.armed = ''; }
     return;
   }
   if (link) link.textContent = '已撤回（下一個整點結案）';
@@ -3020,18 +3044,20 @@ function cancelRec(fid, cat, path) {
 async function sendCancels(fids, cat, path, link) {
   if (!TEAM.on) return;
   if (link) { link.textContent = '撤回中…'; link.dataset.armed = 'busy'; }
+  let j = null;
   try {
     for (const f of fids) {
+      j = null;                                  // 每張各自判（前一張的成功回應不得冒充這一張的原因）
       const r = await fetch('/api/feedback', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
         body: JSON.stringify(cancelRec(f, cat, path)),
       });
-      const j = r.ok ? await r.json() : null;
+      j = await r.json().catch(() => null);    // C451（U256）：500 也讀 body 取原因
       if (!j || !j.ok) throw new Error('bad');
     }
   } catch (e) {
-    if (link) { link.textContent = '撤回送不出去，請稍後再試'; link.dataset.armed = ''; }
+    if (link) { link.textContent = cancelFailText(j); link.dataset.armed = ''; }
     return;
   }
   if (link) link.textContent = '已撤回（下一個整點結案）';

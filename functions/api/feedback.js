@@ -150,6 +150,7 @@ export async function findDuplicate(db, rec) {
     const row = rs && rs.results && rs.results[0];
     return (row && Number.isInteger(row.fid) && row.fid > 0) ? row.fid : 0;
   } catch (e) {
+    console.error('[feedback] findDuplicate', e);   // C451（U256）：只記 log、仍回 0（照常入列）
     return 0;
   }
 }
@@ -227,7 +228,14 @@ export async function onRequestPost({ request, env }) {
     // C332：多回 `turnstile`——前端據以告訴留言者「未通過驗證＝要等站方看過才會出現在留言頁」。
     return json({ ok: true, role: rec.role, reporter: rec.reporter, fid, turnstile: rec.turnstile });
   } catch (e) {
-    return json({ ok: false, err: 'server' }, 500);
+    // C451（U256；站主 M071 §二）：例外原本被吞＝畫面只剩「網路或伺服器問題」、D1 額度用完也看不出來。
+    //   記 log（Functions 即時紀錄看得到）＋回 `detail`＝例外文字（不帶 SQL 參數或列內容）。
+    //   刻意例外：上限 200 字＝例外文字可能含堆疊，只要前段（M071 §二）。
+    console.error('[feedback] onRequestPost', e);
+    return json({
+      ok: false, err: 'server',
+      detail: String((e && e.message) || e).slice(0, 200),
+    }, 500);
   }
 }
 
@@ -317,7 +325,11 @@ export async function onRequestPatch({ request, env }) {
       return json({ ok: true, n: binds.length, notes: 'missing-column' });
     }
   } catch (e) {
-    return json({ ok: false, err: 'server' }, 500);
+    console.error('[feedback] onRequestPatch', e);   // C451（U256）：同 onRequestPost
+    return json({
+      ok: false, err: 'server',
+      detail: String((e && e.message) || e).slice(0, 200),
+    }, 500);
   }
 }
 
