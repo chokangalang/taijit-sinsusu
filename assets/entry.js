@@ -2571,6 +2571,7 @@ async function submitEdit() {
     token: TEAM.token,
   };
   if (op) rec.op = JSON.stringify(op);
+  if (EDIT_CARD && editSlot === EDIT_CARD_SLOT) rec.card_id = EDIT_CARD.id;   // M072（C463）：✎ 開的框＝op 帶卡號
   const kind = s.ours ? 'trans' : !op ? 'desc' : (fixkind === '原書印面本身有誤' ? 'print' : 'fix');
   await postAndReport(rec, kind, btn);
 }
@@ -3023,7 +3024,11 @@ async function loadPatches() {
     if (!r.ok) return;
     const j = await r.json();
     list = (j && j.ok && j.patches) || [];
-    if (j && j.ok) paintReported(j.reported || []);
+    if (j && j.ok) {
+      // M072（C463）：`卡確認`（排隊中的 ✓）不是待校回報＝不畫「已有人回報」，改記成卡的已結狀態
+      CARD_ACKED = new Set((j.reported || []).filter(r => r && r.cat === CARD_CAT).map(r => String(r.path || '')));
+      paintReported(j.reported ? j.reported.filter(r => !(r && r.cat === CARD_CAT)) : []);
+    }
     if (j && j.ok && Array.isArray(j.annots)) paintPendingAnnots(j.annots);   // C427：團隊模式才有這個鍵
     if (j && j.ok && Array.isArray(j.trans)) paintTrans(j.trans);             // C438：同上（中譯提議／翻譯意見）
   } catch (e) { return; }
@@ -3329,6 +3334,191 @@ async function rerender() {
   placeMarkers(ENTRY, root);
   PATCHES = [];
   await loadPatches();
+  paintCards();                          // M072（C463）：裁決卡記號（團隊模式限定）
+}
+
+// ══ M072／U261（C463）：裁決卡上站——開放卡記號、hover 一鍵結卡 ═══════════════════════════════
+// 規格＝協作規畫/M072_裁決卡上站定案_20261112.md §三 C／§五。資料＝`data/cards/{page}.json`
+//   （export `write_open_cards`；**團隊模式才抓**＝一般讀者零請求、零記號；同 `opsrc/` 前例）。
+// ・記號：開放卡之槽旁一枚 `.cardmk`（「疑」；與「已有人回報」徽章可區分）；落點＝`pathEls()`（op 路徑→DOM，
+//   與疊加層同一張對照）；`path` 空或落點找不到＝掛條目標題列並寫出 `field` 原文（定案書明文「不准不畫」）。
+// ・hover（桌機）／點記號（手機）展開：`plain`＋候選純文字 ≤3（值＋來源白話）＋兩鈕。不放書影、不放候選鈕。
+// ・✓ 沒問題：`POST /api/feedback` `{cat:'卡確認', card_id, id, path, op:null}` 一鍵即送；**不彈框、不 alert**；
+//   原地變淡灰 ✓＋「撤回」（送取消件，同 C438 修正件撤回；整點套用前有效）。
+// ・✎ 修改：直接開該槽現成編輯器（預填現值＝openEdit 既有行為），框頭帶 `plain`；送出 op 時多帶 `card_id`。
+// ・已有人 ✓（還在排隊）：`/api/patches` 的 `reported` 清單裡 `cat='卡確認'` 之列（同條目、同 path）＝畫淡灰 ✓；
+//   這類列不畫成「已有人回報」徽章（它不是待校的回報）。
+const CARD_CAT = '卡確認';
+let CARDS = [];                        // 本條目的開放卡
+let CARD_ACKED = new Set();            // 排隊中 ✓ 的 path（他人或自己、重新整理後）
+const CARD_MINE = new Map();           // 本次瀏覽自己剛按的 ✓：card id → fid（給「撤回」）
+let EDIT_CARD = null;                  // ✎ 開的編輯框屬於哪張卡（submitEdit 據此帶 card_id）
+let EDIT_CARD_SLOT = null;
+
+async function loadCards(page) {
+  try {
+    const r = await fetch(`data/cards/${page}.json`, { cache: 'no-store' });
+    if (!r.ok) return [];                // 404＝本頁無開放卡（或切點開關關）＝零記號
+    const j = await r.json();
+    return ((j && j.cards) || []).filter(c => c && c.entry === entryId);
+  } catch (e) { return []; }
+}
+function cardPathArr(p) {
+  const out = [];
+  for (const seg of String(p || '').split('.')) {
+    const m = /^([^[\]]+)((?:\[\d+\])*)$/.exec(seg);
+    if (!m) return null;
+    out.push(m[1]);
+    for (const n of m[2].match(/\d+/g) || []) out.push(parseInt(n, 10));
+  }
+  return out.length ? out : null;
+}
+function cardHosts(c) {
+  const hosts = [];
+  for (const p of (c.paths && c.paths.length ? c.paths : (c.path ? [c.path] : []))) {
+    const arr = cardPathArr(p);
+    const els = arr ? pathEls(arr) : [];
+    if (els.length) hosts.push(els[0]);
+  }
+  return hosts;
+}
+function cardAckState(c) {
+  if (CARD_MINE.has(c.id)) return 'mine';
+  const ps = (c.paths && c.paths.length) ? c.paths : [c.path];
+  return ps.some(p => p && CARD_ACKED.has(p)) ? 'other' : '';
+}
+function cardPop(c, mk) {
+  const pop = document.createElement('span');
+  pop.className = 'cardpop';
+  const p = document.createElement('span');
+  p.className = 'cardplain';
+  p.textContent = c.plain || '';
+  pop.appendChild(p);
+  if (c.options && c.options.length) {
+    const ul = document.createElement('span');
+    ul.className = 'cardopts';
+    for (const o of c.options.slice(0, 3)) {                  // 純文字（定案書：不做候選鈕）
+      const li = document.createElement('span');
+      li.className = 'cardopt';
+      li.textContent = `${o.kana || o.label || o.value}${o.poj ? '（' + o.poj + '）' : ''}`
+                     + (o.why ? `　— ${o.why}` : '');
+      ul.appendChild(li);
+    }
+    pop.appendChild(ul);
+  }
+  const msg = document.createElement('span');
+  msg.className = 'cardmsg';
+  if (cardAckState(c)) {
+    msg.textContent = cardAckState(c) === 'mine' ? '已按「沒問題」（下一個整點結卡）' : '已有人按「沒問題」（下一個整點結卡）';
+  } else {
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'cardok';
+    ok.textContent = '✓ 沒問題';
+    ok.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); cardAck(c, mk, ok, msg); });
+    const ed = document.createElement('button');
+    ed.type = 'button';
+    ed.className = 'cardedit';
+    ed.textContent = '✎ 修改';
+    ed.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); cardEdit(c); });
+    pop.appendChild(ok);
+    pop.appendChild(ed);
+  }
+  pop.appendChild(msg);
+  return pop;
+}
+function cardMarker(c, fallback) {
+  const mk = document.createElement('span');
+  const st = cardAckState(c);
+  mk.className = 'cardmk' + (st ? ' done' : '') + (fallback ? ' fb' : '');
+  mk.tabIndex = 0;
+  mk.dataset.card = c.id;
+  const sym = document.createElement('span');
+  sym.className = 'cardsym';
+  sym.textContent = st ? '✓' : '疑';
+  mk.appendChild(sym);
+  if (fallback) {                                           // 掛標題列＝寫明卡的欄位原文
+    const f = document.createElement('span');
+    f.className = 'cardfield';
+    f.textContent = c.field || c.path || '';
+    mk.appendChild(f);
+  }
+  if (st === 'mine') {
+    const w = document.createElement('a');
+    w.href = '#';
+    w.className = 'cardundo';
+    w.textContent = '撤回';
+    w.addEventListener('click', async ev => {               // 頁內兩段式（不用 confirm()；理由見 withdraw）
+      ev.preventDefault(); ev.stopPropagation();
+      if (w.dataset.armed === 'busy') return;
+      if (w.dataset.armed !== '1') {
+        w.dataset.armed = '1'; w.textContent = '再按一次確定撤回';
+        setTimeout(() => { if (w.dataset.armed === '1') { w.dataset.armed = ''; w.textContent = '撤回'; } }, 4000);
+        return;
+      }
+      const fid = CARD_MINE.get(c.id);
+      CARD_MINE.delete(c.id);
+      await sendCancels([fid], CARD_CAT, c.path || '', w);
+    });
+    mk.appendChild(w);
+  }
+  mk.appendChild(cardPop(c, mk));
+  mk.addEventListener('click', ev => {                      // 手機：點記號展開／收合（桌機 hover 由 CSS）
+    if (ev.target.closest('.cardpop')) return;
+    ev.preventDefault(); ev.stopPropagation();
+    mk.classList.toggle('open');
+  });
+  return mk;
+}
+function paintCards() {
+  const root = $('#entry');
+  if (!TEAM.on || !root || !CARDS.length) return 0;
+  for (const old of root.querySelectorAll('.cardmk')) old.remove();
+  let n = 0;
+  for (const c of CARDS) {
+    const hosts = c.fallback ? [] : cardHosts(c);
+    if (hosts.length) {
+      for (const h of hosts) { h.insertAdjacentElement('afterend', cardMarker(c, false)); n += 1; }
+      continue;
+    }
+    const head = root.querySelector('.entryhead');           // 不准不畫：掛條目標題列
+    if (head) { head.appendChild(cardMarker(c, true)); n += 1; }
+  }
+  return n;
+}
+async function cardAck(c, mk, btn, msg) {
+  if (!TEAM.on || btn.disabled) return;
+  btn.disabled = true;
+  const rec = { source: 'website', ts: new Date().toISOString(), id: entryId, block: '裁決卡',
+                path: c.path || '', cat: CARD_CAT, card_id: c.id, fixkind: '', note: '', token: TEAM.token };
+  let j = null;
+  try {
+    const r = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, teamAuth()),
+      body: JSON.stringify(rec),
+    });
+    j = await r.json().catch(() => null);
+  } catch (e) { j = null; }
+  if (!j || !j.ok) {                                          // 送不出去＝原地說原因（不彈框）
+    btn.disabled = false;
+    msg.textContent = sendFailText(j);
+    return;
+  }
+  CARD_MINE.set(c.id, j.fid);
+  paintCards();                                             // 原地重畫：淡灰 ✓＋撤回
+}
+function cardEdit(c) {
+  if (!TEAM.on) return;
+  const hosts = c.fallback ? [] : cardHosts(c);
+  const root = $('#entry');
+  const el = hosts[0] || (root && root.querySelector('[data-edit="head"]'));
+  if (!el) return;
+  openEdit(el);
+  EDIT_CARD = c;
+  EDIT_CARD_SLOT = editSlot;                                 // 只有這一次開的框帶 card_id（再開別格＝不帶）
+  const ctx = $('#editctx');
+  if (ctx) ctx.textContent = `${ctx.textContent}｜裁決卡：${c.plain || c.id}`;
 }
 
 // ── 初始化 ──────────────────────────────────────────────
@@ -3353,6 +3543,7 @@ async function init() {
   //   `opsrc` 只有團隊模式用得到（產 op 的 `old` 來源）⇒ 一般讀者零額外請求。
   await teamBoot();
   if (TEAM.on) OPSRC = await loadOpsrc(id.split('-')[0]);
+  if (TEAM.on) CARDS = await loadCards(id.split('-')[0]);   // M072（C463）：開放卡（團隊模式才抓）
   const tmix = isBlankKanji(e.head.kanji) ? null
     : mixKanjiParts(e.head.kanji_units, e.head.poj);
   document.title = isBlankKanji(e.head.kanji)
@@ -3361,6 +3552,7 @@ async function init() {
   root.innerHTML = entryHTML(e);
   placeMarkers(e, root);                 // M050 場 1：批注記號須在 DOM 存在之後才放
   await loadPatches();                   // C324：疊加層（定案 §二 14）——對所有人可見，含 queued
+  paintCards();                          // M072（C463）：裁決卡記號（團隊模式限定）
 
   root.addEventListener('click', ev => {
     if (deferRefClick(ev)) return;       // C335（U124）：團隊模式互見連結延後跳頁

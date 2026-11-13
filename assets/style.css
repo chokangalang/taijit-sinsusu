@@ -520,6 +520,26 @@ sup.an:target a, .anitem:target { background: #f6ecd8; }
 .anitem.pendel .antext { text-decoration: line-through; color: #8a7a66; }
 .patch.reported { background: transparent; color: #6b4b2d; border: 1px dashed #c9b27a; cursor: help; }
 .patchundo { margin-left: 5px; color: inherit; text-decoration: underline; cursor: pointer; }
+/* M072／U261（C463）：裁決卡記號（團隊模式限定；與「已有人回報」虛線徽章可區分＝實心小圓、藍系）。
+   hover／focus（桌機）或 .open（手機點記號）展開 .cardpop；已結＝淡灰 ✓。 */
+.cardmk { position: relative; display: inline-block; margin-left: 2px; font-size: 11px; line-height: 1;
+  vertical-align: super; cursor: pointer; }
+.cardmk .cardsym { display: inline-block; min-width: 1.35em; padding: 2px 3px; border-radius: 9px;
+  background: #2f6db0; color: #fff; text-align: center; font-weight: bold; }
+.cardmk.done .cardsym { background: #d4d4d4; color: #666; }
+.cardmk.fb { vertical-align: middle; margin-left: 8px; }
+.cardmk .cardfield { margin-left: 4px; color: #2f6db0; font-size: 11px; }
+.cardmk .cardundo { margin-left: 4px; color: #777; text-decoration: underline; }
+.cardpop { display: none; position: absolute; z-index: 30; left: 0; top: 18px; width: 300px; max-width: 80vw;
+  padding: 8px 10px; background: #fff; border: 1px solid #9db7d6; border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .15); color: #222; font-size: 13px; line-height: 1.5;
+  font-weight: normal; text-align: left; white-space: normal; vertical-align: baseline; }
+.cardmk:hover .cardpop, .cardmk:focus-within .cardpop, .cardmk.open .cardpop { display: block; }
+.cardpop .cardplain, .cardpop .cardopts, .cardpop .cardopt, .cardpop .cardmsg { display: block; }
+.cardpop .cardopts { margin: 4px 0; color: #555; }
+.cardpop .cardopt::before { content: '・'; }
+.cardpop button { margin: 4px 6px 0 0; padding: 2px 10px; font-size: 13px; cursor: pointer; }
+.cardpop .cardmsg { color: #8a4a20; margin-top: 3px; }
 .patched { background: #fdf6df; border-radius: 3px; }
 /* C438（U246 ③④）：送出後原地回饋；中譯提議／翻譯意見（團隊模式限定，現值後面接淺灰一段） */
 .src.sentok { color: #2f6b3a; font-weight: 600; }

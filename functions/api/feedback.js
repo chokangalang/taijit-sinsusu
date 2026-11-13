@@ -120,6 +120,35 @@ export function isMissingColumnErr(e) {
   return /no such column|has no column named/i.test(m) && /turnstile/i.test(m);
 }
 
+// ── M072／U261（C463）：站面裁決卡「✓ 沒問題」＝`cat: '卡確認'`＋`card_id` ─────────────────────
+//   定案書 §三 C 介面合約：✓＝`cat:'卡確認'`、`card_id`、`entry`（＝本檔 `id` 欄）、`path`、`op: null`；
+//   ✎＝現行修正件（cat 照舊）多帶 `card_id`。⇒ 本檔只多收一個欄、空檢查多認一型，其餘一行不改。
+//   · `card_id` 落 D1 第 20 欄（操作者主控台 `ALTER TABLE feedback ADD COLUMN card_id TEXT`；C463 自裁＝加欄，
+//     C441 前例：加前 19 欄、加後 20 欄）。欄還沒加＝退回不帶該欄照收（同 turnstile 前例：寧可少一個標記、
+//     不拒收一筆送件）；合成器那時改以（條目, path）對卡（`card_json.card_index` 的 by_slot），帳照樣接得上。
+//   · 空檢查：`卡確認` 本來就沒有 note／after／op（一鍵即送），帶 `card_id` 即不算空；不帶 `card_id` 的
+//     `卡確認` 仍 400（無從結卡）。空請求照舊 400。
+export const CARD_CAT = '卡確認';
+export const CARD_ID_MAX = 80;
+const OPT_COLS = ['turnstile', 'card_id'];
+
+// 例外文字點名了哪幾個「選配欄」不存在（→ 拿掉重寫）；不是缺欄錯＝回空陣列（照舊丟出）。
+export function missingOptCols(e) {
+  const m = String((e && e.message) || e || '');
+  if (!/no such column|has no column named/i.test(m)) return [];
+  return OPT_COLS.filter(c => new RegExp(c, 'i').test(m));
+}
+
+// → 要寫入的 [欄名…], [值…]（純函式；測試直接呼）。`drop`＝已知不存在的選配欄。
+export function insertCols(rec, drop) {
+  const cols = ['ts', 'id', 'block', 'path', 'before', 'after', 'note', 'reporter', 'role', 'cat',
+                'fixkind', 'quote', 'op', 'status'];
+  const vals = cols.map(k => rec[k]);
+  if (!drop.includes('turnstile')) { cols.push('turnstile'); vals.push(rec.turnstile); }
+  if (rec.card_id && !drop.includes('card_id')) { cols.push('card_id'); vals.push(rec.card_id); }
+  return [cols, vals];
+}
+
 // ── C438（U246 ③；站主 M069_X4 §三.3）：送出去重 ─────────────────────────────────────────
 //   病灶（站主逐筆翻快車道帳）：團隊有 op 送件 533 筆裡同人同條目同 op 重複 25 對，2 秒內 5 對（63 ms／100 ms／
 //   140 ms＝送出鈕雙觸發）。前端已鎖鈕，這裡是第二道：**團隊列**同暱稱、同條目、同內容在 DEDUP_WINDOW_SEC
@@ -190,10 +219,13 @@ export async function onRequestPost({ request, env }) {
       // 那一側另有 `role='team'` 一道，兩道各自獨立）。
       op: team ? f(b.op, 4000) : '',
       status: 'queued',
+      card_id: f(b.card_id, CARD_ID_MAX),        // M072（C463）：✓／✎ 帶卡號；空字串＝不寫該欄
     };
     // 空檢查：原本是 `!note && !after`。加上 `!op` 是**放寬**（多收「只有 op、
     // 沒有文字」那一型＝雙擊編輯器產出的樣子），不會多拒收任何原本收得下的列。
-    if (!rec.id || (!rec.note && !rec.after && !rec.op)) {
+    // M072（C463）再放寬一型：`cat==='卡確認'` 且帶 `card_id`（一鍵 ✓、沒有文字也沒有 op）。
+    const cardAck = rec.cat === CARD_CAT && !!rec.card_id;
+    if (!rec.id || (!rec.note && !rec.after && !rec.op && !cardAck)) {
       return json({ ok: false, err: 'empty' }, 400);
     }
     // C438（U246 ③）：團隊列數秒內同內容重送＝不入列、回原列 fid（見 DEDUP_SQL_* 註）
@@ -207,20 +239,22 @@ export async function onRequestPost({ request, env }) {
     rec.turnstile = team ? 'team'
       : await verifyTurnstile(env, f(b.cf_turnstile, 2048),
                               (request.headers && request.headers.get('cf-connecting-ip')) || '');
-    const vals = [rec.ts, rec.id, rec.block, rec.path, rec.before, rec.after, rec.note,
-                  rec.reporter, rec.role, rec.cat, rec.fixkind, rec.quote, rec.op, rec.status];
+    // C332 起 turnstile、M072（C463）起 card_id 兩個選配欄：缺哪個（ALTER 還沒跑）就拿掉哪個重寫，
+    //   最多重試到兩個都拿掉＝C332 前的 14 欄舊句（寧可少標記、不拒收）。
     let res;
-    try {
-      res = await env.DB.prepare(
-        'INSERT INTO feedback (ts,id,block,path,before,after,note,reporter,role,cat,fixkind,quote,op,status,turnstile)'
-        + ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).bind(...vals, rec.turnstile).run();
-    } catch (e) {
-      if (!isMissingColumnErr(e)) throw e;
-      res = await env.DB.prepare(
-        'INSERT INTO feedback (ts,id,block,path,before,after,note,reporter,role,cat,fixkind,quote,op,status)'
-        + ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).bind(...vals).run();
+    const drop = [];
+    for (;;) {
+      const [cols, vals] = insertCols(rec, drop);
+      try {
+        res = await env.DB.prepare(
+          'INSERT INTO feedback (' + cols.join(',') + ') VALUES (' + cols.map(() => '?').join(',') + ')'
+        ).bind(...vals).run();
+        break;
+      } catch (e) {
+        const miss = missingOptCols(e).filter(c => !drop.includes(c));
+        if (!miss.length) throw e;
+        drop.push(...miss);
+      }
     }
     const fid = (res && res.meta && res.meta.last_row_id) || 0;
     // 回傳 role／reporter／fid：前端要靠 role 決定要不要顯示「校對中」疊加，
