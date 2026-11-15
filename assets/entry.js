@@ -2573,7 +2573,12 @@ async function submitEdit() {
   if (op) rec.op = JSON.stringify(op);
   if (EDIT_CARD && editSlot === EDIT_CARD_SLOT) rec.card_id = EDIT_CARD.id;   // M072（C463）：✎ 開的框＝op 帶卡號
   const kind = s.ours ? 'trans' : !op ? 'desc' : (fixkind === '原書印面本身有誤' ? 'print' : 'fix');
-  await postAndReport(rec, kind, btn);
+  const card = rec.card_id ? EDIT_CARD : null;
+  const sent = await postAndReport(rec, kind, btn);
+  if (sent && card && cardOpTouches(card, op, true)) {        // C476：修改動到卡問的字＝記號當場變已處理
+    CARD_EDITED.add(card.id);
+    paintCards();
+  }
 }
 
 // C438：中譯整句提議送出（路徑＋舊值全文＋新值全文；不走快車道、不帶 op）
@@ -3024,6 +3029,11 @@ async function loadPatches() {
     if (!r.ok) return;
     const j = await r.json();
     list = (j && j.ok && j.patches) || [];
+    CARD_PENDING_OPS = [];                       // C476：排隊中的 op（卡槽本身那一型＝重新整理後仍認「已修改」）
+    for (const row of list) {
+      if (!row || row.status !== 'queued') continue;
+      try { const op = JSON.parse(row.op); if (op && typeof op === 'object') CARD_PENDING_OPS.push(op); } catch (e) { /* 略 */ }
+    }
     if (j && j.ok) {
       // M072（C463）：`卡確認`（排隊中的 ✓）不是待校回報＝不畫「已有人回報」，改記成卡的已結狀態
       CARD_ACKED = new Set((j.reported || []).filter(r => r && r.cat === CARD_CAT).map(r => String(r.path || '')));
@@ -3358,7 +3368,7 @@ let EDIT_CARD_SLOT = null;
 async function loadCards(page) {
   try {
     const r = await fetch(`data/cards/${page}.json`, { cache: 'no-store' });
-    if (!r.ok) return [];                // 404＝本頁無開放卡（或切點開關關）＝零記號
+    if (!r.ok) return [];                // 404＝本頁從未出上站卡（或切點開關關）＝零記號；全結之頁＝`cards: []`（C476）
     const j = await r.json();
     return ((j && j.cards) || []).filter(c => c && c.entry === entryId);
   } catch (e) { return []; }
@@ -3382,11 +3392,54 @@ function cardHosts(c) {
   }
   return hosts;
 }
+// C476（站主 M073_X1 §六.3）：✎ 修改**動到卡所問的那個字**＝卡以修改結（整點合成回覆記新值）⇒ 送出後記號
+//   當場變成已處理（不再留「疑」與兩鈕）；沒動到＝照舊「疑」。判式與 `review_live/card_synth.py`
+//   `card_tok_pair`／`tok_changed` 同一口徑（卡槽本身的 token／注音葉，或整句 `….tw` op 之 `r[k]`）。
+const CARD_TOK_KEYS = ['c', 'k', 'tone', 'nasal', 'asp'];
+const CARD_EDITED = new Set();         // 本次瀏覽自己送出、動到卡問的字的修改：card id
+let CARD_PENDING_OPS = [];             // 排隊中（queued）的 op（重新整理後認「卡槽本身」那一型）
+function cardSlotOf(p) {
+  return String(p || '').replace(/\.(\d+)(?=\.|$)/g, '[$1]').replace(/\.(?:k|c|tone|nasal|asp|mac)$/, '');
+}
+function cardOpPath(op) {
+  const p = op && op.path;
+  if (!Array.isArray(p)) return String(p || '');
+  let s = '';
+  for (const x of p) s += (typeof x === 'number') ? `[${x}]` : (s ? '.' + x : String(x));
+  return s;
+}
+function cardTokChanged(o, n) {
+  if (!o || !n || typeof o !== 'object' || typeof n !== 'object') return false;
+  return CARD_TOK_KEYS.some(x => (o[x] || '') !== (n[x] || ''));
+}
+function cardOpTouches(c, op, withCardId) {
+  if (!c || !op) return false;
+  const os = cardSlotOf(cardOpPath(op));
+  if (c.line === 'skel') {                                   // 骨架卡＝合成器表達得了的表頭 op（`_skel_op_ok`）
+    const ps = ((c.paths && c.paths.length) ? c.paths : [c.path]).map(cardSlotOf);
+    if (/^head\.kana\[\d+\]$/.test(os)) return (withCardId || ps.includes(os)) && cardTokChanged(op.old, op.new);
+    return os === 'head.kanji' && typeof op.new === 'string' && (withCardId || ps.includes(os));
+  }
+  const slot = cardSlotOf(c.path);
+  if (!slot) return false;
+  if (os === slot) {
+    if (typeof op.old === 'string' && typeof op.new === 'string') return op.old !== op.new;
+    return cardTokChanged(op.old, op.new);
+  }
+  const m = /^(senses\[\d+\]\.examples\[\d+\])\.tw_ruby\[(\d+)\]$/.exec(slot);
+  if (!withCardId || !m || os !== m[1] + '.tw') return false;  // 整句 op 只在帶卡號時結卡（同後端 resolve_card）
+  const ro = op.old && op.old.r, rn = op.new && op.new.r, k = parseInt(m[2], 10);
+  return Array.isArray(ro) && Array.isArray(rn) && ro.length === rn.length && rn.length > k
+    && cardTokChanged(ro[k], rn[k]);
+}
 function cardAckState(c) {
   if (CARD_MINE.has(c.id)) return 'mine';
+  if (CARD_EDITED.has(c.id) || CARD_PENDING_OPS.some(op => cardOpTouches(c, op, false))) return 'edited';
   const ps = (c.paths && c.paths.length) ? c.paths : [c.path];
   return ps.some(p => p && CARD_ACKED.has(p)) ? 'other' : '';
 }
+const CARD_STATE_TEXT = { mine: '已按「沒問題」（下一個整點結卡）', other: '已有人按「沒問題」（下一個整點結卡）',
+                          edited: '已修改這個字（下一個整點結卡）' };
 function cardPop(c, mk) {
   const pop = document.createElement('span');
   pop.className = 'cardpop';
@@ -3409,7 +3462,7 @@ function cardPop(c, mk) {
   const msg = document.createElement('span');
   msg.className = 'cardmsg';
   if (cardAckState(c)) {
-    msg.textContent = cardAckState(c) === 'mine' ? '已按「沒問題」（下一個整點結卡）' : '已有人按「沒問題」（下一個整點結卡）';
+    msg.textContent = CARD_STATE_TEXT[cardAckState(c)] || '';
   } else {
     const ok = document.createElement('button');
     ok.type = 'button';
