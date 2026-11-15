@@ -3112,10 +3112,12 @@ function zhHostEls(path) {
   if (m) return Array.from(root.querySelectorAll(`[data-edit="${m[1]}.modern"] .zhline`));
   return [];
 }
+// C479：D1 `received`＝UTC（`datetime('now')`）→ 顯示台灣時間（+8）；只認「YYYY-MM-DD HH:MM」開頭，其餘原樣（四處同式＝test_tw_time）
+function twTime(s){var m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(s==null?'':s));if(!m)return String(s==null?'':s);var d=new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4]+8,+m[5]));function p(n){return (n<10?'0':'')+n;}return d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate())+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes());}
 function transText(x) {
   const who = x.reporter || '（未署名）';
   if (x.after) return `（${who}：${x.after}）`;
-  const md = String(x.received || '').slice(5, 10);
+  const md = twTime(x.received).slice(5, 10);   // C479：UTC 16:00 後＝台灣隔天
   return `（${who}・意見${md ? ' ' + md : ''}：${String(x.note || '').trim()}）`;
 }
 function transStale(x) {

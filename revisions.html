@@ -35,7 +35,7 @@
 <main>
   <section class="card">
     <h2>修訂紀錄</h2>
-    <p class="hint">使用者回報經查證後的處理結果，新到舊排列。感謝每一位回報者——你們的眼睛讓這部辭典更可靠。</p>
+    <p class="hint">使用者回報經查證後的處理結果，新到舊排列。感謝每一位回報者——你們的眼睛讓這部辭典更可靠。回報時間為台灣時間。</p>
     <div class="revtable-wrap">
       <table class="revtable">
         <colgroup>
@@ -63,10 +63,16 @@ const ACT = { 'engine-fix': '引擎修正', 'data-fix': '資料修正', 'ed-over
               '維持照印': '維持照印', '不成立': '不成立', '維持': '維持' };
 const escR = s => String(s == null ? '' : s).replace(/[&<>"]/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// C479：D1 `received`＝UTC（`datetime('now')`）→ 顯示台灣時間（+8）；只認「YYYY-MM-DD HH:MM」開頭，其餘原樣（四處同式＝test_tw_time）
+function twTime(s){var m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(String(s==null?'':s));if(!m)return String(s==null?'':s);var d=new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4]+8,+m[5]));function p(n){return (n<10?'0':'')+n;}return d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate())+' '+p(d.getUTCHours())+':'+p(d.getUTCMinutes());}
+// 分界（C479 實證、操作者裁）：有 fid 之列＝`reported` 取自 D1 `received`（UTC）⇒ 換；
+//   無 fid 之列（裁決回覆 exported_at 已 +8、夥伴端／站主手寫）＝已是台灣時間 ⇒ 不換；
+//   快車道撤回列 `YYYY-MM-DDTHH:MM`（站主機當地時鐘）與只有日期之列＝twTime 不認 ⇒ 原樣。
+const repShown = r => (r.fid != null && r.fid !== '' ? twTime(r.reported) : String(r.reported || '')).slice(0, 16);
 fetch('data/revisions.json').then(r => r.json()).then(d => {
   const tb = document.getElementById('revbody');
   const revs = (d.revisions || []).slice().sort((a, b) =>
-    String(b.reported || '').localeCompare(String(a.reported || '')) || ((b.rid || 0) - (a.rid || 0)));
+    repShown(b).localeCompare(repShown(a)) || ((b.rid || 0) - (a.rid || 0)));
   if (!revs.length) {
     tb.innerHTML = '<tr><td colspan="6" class="pending">尚無修訂紀錄。</td></tr>';
     return;
@@ -74,7 +80,7 @@ fetch('data/revisions.json').then(r => r.json()).then(d => {
   tb.innerHTML = revs.map(r => {
     const keep = (r.action === '維持照印' || r.action === '不成立' || r.action === '維持');
     return `<tr>
-      <td class="nowrap">${escR((r.reported || '').slice(0, 16))}</td>
+      <td class="nowrap">${escR(repShown(r))}</td>
       <td><a href="entry.html?id=${encodeURIComponent(r.id || '')}">${escR(r.id)}</a></td>
       <td class="issue">${escR(r.issue)}</td>
       <td>${escR(r.reporter || '—')}</td>
